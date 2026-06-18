@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "jules": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": ".",
+      "env": {
+        "JULES_API_KEY": "${JULES_API_KEY}"
+      }
+    }
+  }
+}
