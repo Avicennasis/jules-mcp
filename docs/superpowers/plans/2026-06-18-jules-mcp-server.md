@@ -74,8 +74,8 @@ Then replace the generated `package.json`:
 
 ```bash
 cd ~/github/avic/jules-mcp
-npm install @modelcontextprotocol/sdk node-cron zod
-npm install -D typescript @types/node vitest tsx
+npm install @modelcontextprotocol/sdk node-cron zod@^3
+npm install -D typescript @types/node @types/node-cron vitest tsx
 ```
 
 - [ ] **Step 3: Create tsconfig.json**
@@ -421,13 +421,6 @@ export interface Activity {
   activity: ActivityType;
 }
 
-// --- Pagination ---
-
-export interface PaginatedResponse<T> {
-  items: T[];
-  nextPageToken?: string;
-}
-
 // --- Scheduling ---
 
 export interface ScheduleEntry {
@@ -464,7 +457,7 @@ cd ~/github/avic/jules-mcp
 npx vitest run tests/errors.test.ts
 ```
 
-Expected: all 5 tests PASS.
+Expected: all 6 tests PASS.
 
 - [ ] **Step 10: Add tests for normalizeResourceName**
 
@@ -550,6 +543,14 @@ import * as os from 'node:os';
 vi.mock('node:child_process', () => ({
   execFile: vi.fn(),
 }));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return {
+    ...actual,
+    accessSync: vi.fn(), // returns undefined = no error = binary exists
+  };
+});
 
 describe('emitAudit', () => {
   const baseOpts = {
@@ -740,7 +741,7 @@ cd ~/github/avic/jules-mcp
 npx vitest run tests/audit.test.ts
 ```
 
-Expected: all 3 tests PASS.
+Expected: all 4 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -759,7 +760,7 @@ git commit -m "feat: audit module with inkwell-emit and JSONL fallback"
 - Test: `tests/jules-client.test.ts`
 
 **Interfaces:**
-- Consumes: `JulesAPIError`, `JulesAuthError`, `JulesNotFoundError`, `JulesRateLimitError` from `src/errors.ts`; `Session`, `Source`, `Activity`, `PaginatedResponse`, `normalizeResourceName` from `src/types.ts`.
+- Consumes: `JulesAPIError`, `JulesAuthError`, `JulesNotFoundError`, `JulesRateLimitError` from `src/errors.ts`; `Session`, `Source`, `Activity`, `normalizeResourceName` from `src/types.ts`.
 - Produces: `class JulesClient` with methods:
   - `constructor(apiKey: string)`
   - `listSources(): Promise<Source[]>`
@@ -901,12 +902,9 @@ describe('JulesClient', () => {
       mockFetch.mockResolvedValueOnce(
         jsonResponse({ error: 'slow down' }, 429, { 'retry-after': '60' }),
       );
-      try {
-        await client.listSources();
-      } catch (e) {
-        expect(e).toBeInstanceOf(JulesRateLimitError);
-        expect((e as JulesRateLimitError).retryAfter).toBe(60);
-      }
+      const err = await client.listSources().catch((e) => e);
+      expect(err).toBeInstanceOf(JulesRateLimitError);
+      expect(err.retryAfter).toBe(60);
     });
   });
 });
@@ -968,7 +966,7 @@ export class JulesClient {
       'X-Goog-Api-Key': this.apiKey,
     };
 
-    const init: RequestInit = { method, headers };
+    const init: RequestInit = { method, headers, signal: AbortSignal.timeout(30000) };
 
     if (body) {
       headers['Content-Type'] = 'application/json';
@@ -1159,7 +1157,7 @@ describe('describeState', () => {
   it('returns human-readable descriptions', () => {
     expect(describeState('QUEUED')).toBe('Queued — waiting to start');
     expect(describeState('AWAITING_PLAN_APPROVAL')).toContain('plan');
-    expect(describeState('COMPLETED')).toContain('complete');
+    expect(describeState('COMPLETED')).toContain('Complete');
   });
 });
 
@@ -1231,7 +1229,7 @@ describe('formatActivity', () => {
     };
     const result = formatActivity(activity);
     expect(result).toContain('I found the bug');
-    expect(result).toContain('agent');
+    expect(result).toContain('Agent');
   });
 
   it('formats plan generated activities', () => {
@@ -1370,7 +1368,6 @@ function formatArtifacts(artifacts: Artifact[]): string {
 export function formatActivity(activity: Activity): string {
   const parts: string[] = [];
   const time = activity.createTime;
-  const from = activity.originator;
 
   const act = activity.activity;
 
@@ -1580,6 +1577,7 @@ describe('session tools', () => {
     expect(parsed.status).toBe('ERROR');
     expect(parsed.code).toBe(409);
     expect(result.isError).toBe(true);
+    expect(mockClient.approvePlan).not.toHaveBeenCalled();
   });
 
   it('jules_get_session returns formatted session', async () => {
@@ -1617,7 +1615,7 @@ function errorResponse(error: unknown) {
         text: JSON.stringify(
           error instanceof JulesAPIError
             ? error.toJSON()
-            : { status: 'ERROR', message: String(error) },
+            : { status: 'ERROR', message: String(error), code: 500 },
         ),
       },
     ],
@@ -1693,7 +1691,7 @@ function errorResponse(error: unknown) {
         text: JSON.stringify(
           error instanceof JulesAPIError
             ? error.toJSON()
-            : { status: 'ERROR', message: String(error) },
+            : { status: 'ERROR', message: String(error), code: 500 },
         ),
       },
     ],
@@ -1847,7 +1845,7 @@ export function registerSessionTools(
           source: 'jules-mcp',
           category: 'coding-task',
           action: 'POST_FAIL',
-          service: session_id,
+          service: current?.sourceContext?.source ?? session_id,
           reason,
           payload: { error: String(error) },
         });
@@ -2011,7 +2009,7 @@ function errorResponse(error: unknown) {
         text: JSON.stringify(
           error instanceof JulesAPIError
             ? error.toJSON()
-            : { status: 'ERROR', message: String(error) },
+            : { status: 'ERROR', message: String(error), code: 500 },
         ),
       },
     ],
@@ -2098,7 +2096,7 @@ git commit -m "feat: MCP tool handlers for activities"
 **Interfaces:**
 - Consumes: `ScheduleEntry` from `src/types.ts`; `JulesClient` and `CreateSessionRequest` from `src/jules-client.ts`; `emitAudit` from `src/audit.ts`.
 - Produces:
-  - `class ScheduleStore` with methods: `constructor(encryptionKey?: string)`, `load(): ScheduleEntry[]`, `save(entries: ScheduleEntry[]): void`, `add(entry: ScheduleEntry): void`, `remove(id: string): boolean`, `list(): ScheduleEntry[]`.
+  - `class ScheduleStore` with methods: `constructor(encryptionKey?: string, dir?: string)`, `load(): ScheduleEntry[]`, `save(entries: ScheduleEntry[]): void`, `add(entry: ScheduleEntry): void`, `remove(id: string): boolean`, `list(): ScheduleEntry[]`.
   - `class ScheduleManager` with methods: `constructor(store: ScheduleStore, client: JulesClient)`, `start(): void`, `stop(): void`, `add(entry: Omit<ScheduleEntry, 'id' | 'createdAt'>): ScheduleEntry`, `remove(id: string): boolean`, `list(): ScheduleEntry[]`.
 
 - [ ] **Step 1: Write failing tests**
@@ -2251,7 +2249,16 @@ export class ScheduleStore {
       // Derive a 32-byte key from the provided string
       this.key = crypto.scryptSync(encryptionKey, 'jules-mcp-salt', 32);
     } else {
-      this.key = null;
+      // Auto-generate and persist a key if none provided
+      fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+      const keyPath = path.join(this.dir, '.key');
+      if (fs.existsSync(keyPath)) {
+        this.key = Buffer.from(fs.readFileSync(keyPath, 'utf-8').trim(), 'hex');
+      } else {
+        const generated = crypto.randomBytes(32);
+        fs.writeFileSync(keyPath, generated.toString('hex'), { mode: 0o600 });
+        this.key = generated;
+      }
     }
 
     this.loadFromDisk();
@@ -2367,6 +2374,10 @@ export class ScheduleManager {
   add(
     input: Omit<ScheduleEntry, 'id' | 'createdAt'>,
   ): ScheduleEntry {
+    if (!cron.validate(input.cron)) {
+      throw new Error(\`Invalid cron expression: \"\${input.cron}\"\`);
+    }
+
     const entry: ScheduleEntry = {
       ...input,
       id: crypto.randomUUID(),
@@ -2532,7 +2543,7 @@ describe('scheduling tools', () => {
 
   it('jules_list_schedules with delete action removes', async () => {
     const handler = registeredTools.get('jules_list_schedules')!.handler;
-    await handler({ action: 'delete', schedule_id: 'sched-1' });
+    await handler({ action: 'delete', schedule_id: 'sched-1', reason: 'no longer needed' });
     expect(mockManager.remove).toHaveBeenCalledWith('sched-1');
   });
 });
@@ -2636,7 +2647,7 @@ function errorResponse(error: unknown) {
         text: JSON.stringify(
           error instanceof JulesAPIError
             ? error.toJSON()
-            : { status: 'ERROR', message: String(error) },
+            : { status: 'ERROR', message: String(error), code: 500 },
         ),
       },
     ],
@@ -2715,21 +2726,33 @@ export function registerSchedulingTools(
     {
       action: z.enum(['list', 'delete']).default('list').describe('"list" to show all schedules, "delete" to remove one'),
       schedule_id: z.string().optional().describe('Schedule ID to delete (required for delete action)'),
+      reason: z.string().optional().describe('Why this schedule is being deleted (required for delete action)'),
     },
-    async ({ action, schedule_id }) => {
+    async ({ action, schedule_id, reason }) => {
       if (action === 'delete') {
-        if (!schedule_id) {
+        if (!schedule_id || !reason) {
           return {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ status: 'ERROR', message: 'schedule_id is required for delete action' }),
+                text: JSON.stringify({ status: 'ERROR', message: 'schedule_id and reason are required for delete action', code: 400 }),
               },
             ],
             isError: true,
           };
         }
+        const entry = manager.list().find((e) => e.id === schedule_id);
         const removed = manager.remove(schedule_id);
+        if (removed) {
+          await emitAudit({
+            source: 'jules-mcp',
+            category: 'scheduling',
+            action: 'DELETE',
+            service: entry?.source ?? schedule_id,
+            reason,
+            target: schedule_id,
+          });
+        }
         return {
           content: [
             {
@@ -2779,7 +2802,7 @@ function errorResponse(error: unknown) {
         text: JSON.stringify(
           error instanceof JulesAPIError
             ? error.toJSON()
-            : { status: 'ERROR', message: String(error) },
+            : { status: 'ERROR', message: String(error), code: 500 },
         ),
       },
     ],
@@ -2806,8 +2829,8 @@ export function registerConvenienceTools(
       automation_mode: z.enum(['AUTOMATION_MODE_UNSPECIFIED', 'AUTO_CREATE_PR']).optional(),
       reason: z.string().describe('Why this task is being run (for audit log)'),
       auto_approve: z.boolean().default(true).describe('Auto-approve the plan when ready'),
-      poll_interval_ms: z.number().default(5000).describe('Polling interval in milliseconds'),
-      timeout_ms: z.number().default(600000).describe('Maximum wait time in milliseconds (default 10 minutes)'),
+      poll_interval_ms: z.number().int().positive().default(5000).describe('Polling interval in milliseconds'),
+      timeout_ms: z.number().int().positive().default(600000).describe('Maximum wait time in milliseconds (default 10 minutes)'),
     },
     async ({ prompt, source, starting_branch, title, automation_mode, reason, auto_approve, poll_interval_ms, timeout_ms }) => {
       try {
@@ -2819,7 +2842,7 @@ export function registerConvenienceTools(
             githubRepoContext: { startingBranch: starting_branch },
           },
           title,
-          requirePlanApproval: auto_approve, // if auto_approve, still require it so we can approve it
+          requirePlanApproval: true, // always require — auto_approve controls whether WE approve, not whether Jules skips
           automationMode: automation_mode,
         });
 
@@ -2848,7 +2871,21 @@ export function registerConvenienceTools(
               reason: `Auto-approved plan for run_task: ${reason}`,
               target: current.id,
             });
+            await sleep(poll_interval_ms);
+            current = await client.getSession(current.id);
             continue;
+          }
+
+          if (current.state === 'AWAITING_PLAN_APPROVAL' && !auto_approve) {
+            // User wants manual plan review — return so they can approve
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Session has a plan ready for review. Use jules_approve_plan to approve it.\n\n${formatSession(current)}`,
+                },
+              ],
+            };
           }
 
           if (current.state === 'AWAITING_USER_FEEDBACK') {
@@ -2977,15 +3014,14 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+async function shutdown() {
   manager.stop();
+  await server.close();
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', () => {
-  manager.stop();
-  process.exit(0);
-});
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 ```
 
 - [ ] **Step 2: Verify it builds**
@@ -3019,6 +3055,7 @@ git commit -m "feat: MCP server entry point with all tools and scheduler"
 ### Task 10: Plugin Config, LICENSE & Smoke Test
 
 **Files:**
+- Create: `.env.example`
 - Create: `LICENSE`
 - Create: `.claude/settings.json`
 - Create: `scripts/smoke-test.ts`
@@ -3027,7 +3064,20 @@ git commit -m "feat: MCP server entry point with all tools and scheduler"
 - Consumes: the built MCP server at `dist/index.js`; `JulesClient` from `src/jules-client.ts`.
 - Produces: a working Claude Code plugin MCP config; MIT license; smoke test script.
 
-- [ ] **Step 1: Create MIT LICENSE**
+- [ ] **Step 1: Create .env.example**
+
+Create `.env.example`:
+
+```
+# Required: Google Jules API key (get from https://jules.google/settings)
+JULES_API_KEY=
+
+# Optional: encryption key for schedule persistence
+# If not set, a key is auto-generated and stored locally
+JULES_ENCRYPTION_KEY=
+```
+
+- [ ] **Step 2: Create MIT LICENSE**
 
 Create `LICENSE`:
 
@@ -3055,7 +3105,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-- [ ] **Step 2: Create Claude Code plugin MCP config**
+- [ ] **Step 3: Create Claude Code plugin MCP config**
 
 Create `.claude/settings.json`:
 
@@ -3074,7 +3124,7 @@ Create `.claude/settings.json`:
 }
 ```
 
-- [ ] **Step 3: Create smoke test**
+- [ ] **Step 4: Create smoke test**
 
 Create `scripts/smoke-test.ts`:
 
@@ -3128,7 +3178,7 @@ async function main() {
 main().catch(console.error);
 ```
 
-- [ ] **Step 4: Build and verify everything works**
+- [ ] **Step 5: Build and verify everything works**
 
 ```bash
 cd ~/github/avic/jules-mcp
@@ -3138,15 +3188,15 @@ npm run test
 
 Expected: build succeeds, all tests PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd ~/github/avic/jules-mcp
-git add LICENSE .claude/settings.json scripts/smoke-test.ts
-git commit -m "feat: MIT license, plugin config, and smoke test"
+git add .env.example LICENSE .claude/settings.json scripts/smoke-test.ts
+git commit -m "feat: MIT license, env example, plugin config, and smoke test"
 ```
 
-- [ ] **Step 6: Run smoke test against real API**
+- [ ] **Step 7: Run smoke test against real API**
 
 ```bash
 cd ~/github/avic/jules-mcp
@@ -3156,7 +3206,7 @@ npm run smoke
 
 Expected: lists sources and recent sessions without errors.
 
-- [ ] **Step 7: Final commit — tag v0.1.0**
+- [ ] **Step 8: Final commit — tag v0.1.0**
 
 ```bash
 cd ~/github/avic/jules-mcp
