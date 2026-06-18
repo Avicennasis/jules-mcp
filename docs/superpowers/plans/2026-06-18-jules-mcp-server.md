@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Node 18+ required (for built-in `fetch`); developed on Node 22
+- Node 20+ required (node-cron 4.x requires >=20; built-in `fetch`); developed on Node 22
 - All API calls use `X-Goog-Api-Key` header from `JULES_API_KEY` env var
 - Base URL: `https://jules.googleapis.com/v1alpha`
 - All mutation tools require a `reason: string` parameter
@@ -65,7 +65,7 @@ Then replace the generated `package.json`:
   },
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }
 ```
@@ -1307,7 +1307,7 @@ export function truncatePatch(patch: string, maxLines = 50): string {
 
 export function formatPlan(plan: Plan): string {
   const header = `Plan ${plan.id}:`;
-  const steps = plan.steps
+  const steps = [...plan.steps]
     .sort((a, b) => a.index - b.index)
     .map((s) => `${s.index + 1}. ${s.title}\n   ${s.description}`)
     .join('\n');
@@ -1679,6 +1679,8 @@ Create `src/tools/sessions.ts`:
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
+import type { Session } from '../types.js';
+import { normalizeResourceName } from '../types.js';
 import { emitAudit } from '../audit.js';
 import { formatSession } from '../formatters.js';
 import { JulesAPIError, JulesStateError } from '../errors.js';
@@ -1717,10 +1719,11 @@ export function registerSessionTools(
       dry_run: z.boolean().default(false).describe('Preview the request without executing'),
     },
     async ({ prompt, source, starting_branch, title, require_plan_approval, automation_mode, reason, dry_run }) => {
+      const normalizedSource = normalizeResourceName(source, 'sources');
       const body = {
         prompt,
         sourceContext: {
-          source,
+          source: normalizedSource,
           githubRepoContext: { startingBranch: starting_branch },
         },
         title,
@@ -1749,7 +1752,7 @@ export function registerSessionTools(
           source: 'jules-mcp',
           category: 'coding-task',
           action: 'POST',
-          service: source,
+          service: normalizedSource,
           reason,
           target: session.id,
           payload: { prompt, title },
@@ -1762,7 +1765,7 @@ export function registerSessionTools(
           source: 'jules-mcp',
           category: 'coding-task',
           action: 'POST_FAIL',
-          service: source,
+          service: normalizedSource,
           reason,
           payload: { prompt, error: String(error) },
         });
@@ -1821,9 +1824,10 @@ export function registerSessionTools(
       reason: z.string().describe('Why the plan is being approved (for audit log)'),
     },
     async ({ session_id, reason }) => {
+      let current: Session | undefined;
       try {
         // Pre-validate state before calling the API
-        const current = await client.getSession(session_id);
+        current = await client.getSession(session_id);
         if (current.state !== 'AWAITING_PLAN_APPROVAL') {
           throw new JulesStateError('approve_plan', current.state);
         }
@@ -2341,7 +2345,7 @@ export class ScheduleStore {
 Create `src/scheduler/cron.ts`:
 
 ```typescript
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import * as crypto from 'node:crypto';
 import type { ScheduleEntry } from '../types.js';
 import type { ScheduleStore } from './persistence.js';
@@ -2351,7 +2355,7 @@ import { emitAudit } from '../audit.js';
 export class ScheduleManager {
   private readonly store: ScheduleStore;
   private readonly client: JulesClient;
-  private readonly jobs: Map<string, cron.ScheduledTask> = new Map();
+  private readonly jobs: Map<string, ScheduledTask> = new Map();
 
   constructor(store: ScheduleStore, client: JulesClient) {
     this.store = store;
@@ -2634,6 +2638,7 @@ Create `src/tools/scheduling.ts`:
 
 ```typescript
 import { z } from 'zod';
+import cron from 'node-cron';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ScheduleManager } from '../scheduler/cron.js';
 import { emitAudit } from '../audit.js';
@@ -2683,6 +2688,10 @@ export function registerSchedulingTools(
         requirePlanApproval: require_plan_approval,
         automationMode: automation_mode,
       };
+
+      if (!cron.validate(input.cron)) {
+        return errorResponse(new Error(`Invalid cron expression: ${input.cron}`));
+      }
 
       if (dry_run) {
         return {
@@ -2757,10 +2766,11 @@ export function registerSchedulingTools(
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({
-                status: removed ? 'OK' : 'ERROR',
-                message: removed ? `Schedule ${schedule_id} deleted` : `Schedule ${schedule_id} not found`,
-              }),
+              text: JSON.stringify(
+                removed
+                  ? { status: 'OK', message: `Schedule ${schedule_id} deleted` }
+                  : { status: 'ERROR', message: `Schedule ${schedule_id} not found`, code: 404 },
+              ),
             },
           ],
           isError: !removed,
@@ -2791,7 +2801,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
 import { emitAudit } from '../audit.js';
 import { formatSession } from '../formatters.js';
-import { TERMINAL_STATES } from '../types.js';
+import { TERMINAL_STATES, normalizeResourceName } from '../types.js';
 import { JulesAPIError } from '../errors.js';
 
 function errorResponse(error: unknown) {
@@ -2833,12 +2843,13 @@ export function registerConvenienceTools(
       timeout_ms: z.number().int().positive().default(600000).describe('Maximum wait time in milliseconds (default 10 minutes)'),
     },
     async ({ prompt, source, starting_branch, title, automation_mode, reason, auto_approve, poll_interval_ms, timeout_ms }) => {
+      const normalizedSource = normalizeResourceName(source, 'sources');
       try {
         // 1. Create session
         const session = await client.createSession({
           prompt,
           sourceContext: {
-            source,
+            source: normalizedSource,
             githubRepoContext: { startingBranch: starting_branch },
           },
           title,
@@ -2850,7 +2861,7 @@ export function registerConvenienceTools(
           source: 'jules-mcp',
           category: 'coding-task',
           action: 'POST',
-          service: source,
+          service: normalizedSource,
           reason,
           target: session.id,
           payload: { prompt, title, mode: 'run_task' },
@@ -2867,7 +2878,7 @@ export function registerConvenienceTools(
               source: 'jules-mcp',
               category: 'coding-task',
               action: 'POST',
-              service: source,
+              service: normalizedSource,
               reason: `Auto-approved plan for run_task: ${reason}`,
               target: current.id,
             });
@@ -2909,9 +2920,15 @@ export function registerConvenienceTools(
             content: [
               {
                 type: 'text' as const,
-                text: `Timed out after ${timeout_ms}ms. Session is still ${current.state}.\n\n${formatSession(current)}`,
+                text: JSON.stringify({
+                  status: 'ERROR',
+                  message: `Timed out after ${timeout_ms}ms. Session is still ${current.state}.`,
+                  code: 408,
+                  session: formatSession(current),
+                }),
               },
             ],
+            isError: true,
           };
         }
 
@@ -2923,7 +2940,7 @@ export function registerConvenienceTools(
           source: 'jules-mcp',
           category: 'coding-task',
           action: 'POST_FAIL',
-          service: source,
+          service: normalizedSource,
           reason,
           payload: { prompt, error: String(error), mode: 'run_task' },
         });
@@ -3146,6 +3163,7 @@ if (!apiKey) {
 const client = new JulesClient(apiKey);
 
 async function main() {
+  let failures = 0;
   console.log('=== Jules MCP Smoke Test ===\n');
 
   // Test 1: List sources
@@ -3158,6 +3176,7 @@ async function main() {
     }
   } catch (error) {
     console.error(`   FAILED: ${error}`);
+    failures++;
   }
 
   // Test 2: List sessions
@@ -3170,9 +3189,14 @@ async function main() {
     }
   } catch (error) {
     console.error(`   FAILED: ${error}`);
+    failures++;
   }
 
   console.log('\n=== Smoke test complete ===');
+  if (failures > 0) {
+    console.error(`${failures} test(s) failed`);
+    process.exit(1);
+  }
 }
 
 main().catch(console.error);
