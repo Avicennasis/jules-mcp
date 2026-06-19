@@ -101,6 +101,23 @@ describe('JulesClient', () => {
     });
   });
 
+  describe('sendMessage', () => {
+    it('posts the text under the "prompt" field (not "message")', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        name: 'sessions/abc', id: 'abc', state: 'IN_PROGRESS',
+        prompt: 'x', sourceContext: { source: 's' },
+        createTime: '', updateTime: '', url: '',
+      }));
+
+      await client.sendMessage('abc', 'hello there');
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toContain(':sendMessage');
+      const body = JSON.parse(opts.body);
+      expect(body.prompt).toBe('hello there');
+      expect(body.message).toBeUndefined();
+    });
+  });
+
   describe('error handling', () => {
     it('throws JulesAuthError on 401', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ error: 'unauth' }, 401));

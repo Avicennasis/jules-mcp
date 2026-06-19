@@ -136,8 +136,10 @@ export class JulesClient {
 
   async sendMessage(sessionId: string, message: string): Promise<Session> {
     const name = normalizeResourceName(sessionId, 'sessions');
+    // The Jules API expects the text under "prompt" (same field as session
+    // creation), not "message".
     return this.request<Session>(`/${name}:sendMessage`, 'POST', {
-      message,
+      prompt: message,
     });
   }
 
