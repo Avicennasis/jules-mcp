@@ -1,5 +1,10 @@
 # jules-mcp
 
+[![CI](https://github.com/Avicennasis/jules-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/Avicennasis/jules-mcp/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 An [MCP](https://modelcontextprotocol.io) server that exposes [Google Jules](https://jules.google) — Google's asynchronous coding agent — as tools an MCP client (Claude Code, Claude Desktop, etc.) can call directly.
 
 Built on the **official** Jules REST API (`v1alpha`). No cookie scraping, no headless-browser automation, no reverse-engineered endpoints — just the documented API with an `X-Goog-Api-Key`.
