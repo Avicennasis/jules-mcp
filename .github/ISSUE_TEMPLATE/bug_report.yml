@@ -1,7 +1,7 @@
 name: Bug report
 description: Something is broken or behaves unexpectedly
-title: "[bug] "
-labels: ["bug"]
+title: '[bug] '
+labels: ['bug']
 body:
   - type: markdown
     attributes:
@@ -37,9 +37,9 @@ body:
   - type: input
     id: version
     attributes:
-      label: "jules-mcp version / commit"
-      description: "Version tag you installed, or the commit SHA you built from."
-      placeholder: "v0.1.0 or a1b2c3d"
+      label: 'jules-mcp version / commit'
+      description: 'Version tag you installed, or the commit SHA you built from.'
+      placeholder: 'v0.1.0 or a1b2c3d'
     validations:
       required: true
 
@@ -53,7 +53,7 @@ body:
     id: os
     attributes:
       label: OS
-      placeholder: "Linux / macOS / Windows + version"
+      placeholder: 'Linux / macOS / Windows + version'
 
   - type: textarea
     id: logs

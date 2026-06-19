@@ -14,17 +14,17 @@ import { registerDiffTools } from './tools/diff.js';
 
 const apiKey = process.env.JULES_API_KEY;
 if (!apiKey) {
-  console.error(
-    'JULES_API_KEY environment variable is required. Generate one at https://jules.google/settings',
-  );
-  process.exit(1);
+    console.error(
+        'JULES_API_KEY environment variable is required. Generate one at https://jules.google/settings',
+    );
+    process.exit(1);
 }
 
 const encryptionKey = process.env.JULES_ENCRYPTION_KEY;
 
 const server = new McpServer({
-  name: 'jules-mcp',
-  version: '0.2.0',
+    name: 'jules-mcp',
+    version: '0.2.0',
 });
 
 const client = new JulesClient(apiKey);
@@ -48,9 +48,9 @@ await server.connect(transport);
 
 // Graceful shutdown
 async function shutdown() {
-  manager.stop();
-  await server.close();
-  process.exit(0);
+    manager.stop();
+    await server.close();
+    process.exit(0);
 }
 
 process.on('SIGINT', shutdown);

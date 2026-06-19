@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Initial project scaffolding.
 - `jules_list_sessions`: `source` filter (find sessions for one repo without
   dumping every connected repo), `compact` one-line-per-session output,
@@ -18,5 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `+/-` line counts instead of the full diff, for large changesets.
 
 ### Changed
+
 - `jules_list_sessions` response now includes `pagesFetched` (and `scanned` /
   `filteredBy` when a `source` filter is applied).

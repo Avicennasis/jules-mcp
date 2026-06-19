@@ -39,6 +39,7 @@ QUEUED → PLANNING → AWAITING_PLAN_APPROVAL → IN_PROGRESS → COMPLETED
 ```
 
 Key states:
+
 - `AWAITING_PLAN_APPROVAL` — Jules has a plan, needs `approve_plan` call
 - `AWAITING_USER_FEEDBACK` — Jules is blocked, needs `send_message` call
 - `IN_PROGRESS` — Jules is working, poll with `get_session`
@@ -48,49 +49,51 @@ Key states:
 
 ### Sources (2 tools)
 
-| Tool | Jules API | Description |
-|------|-----------|-------------|
-| `jules_list_sources` | `GET /sources` | List connected GitHub repos. Returns name, repo details. |
-| `jules_get_source` | `GET /sources/{id}` | Get details for a specific source. |
+| Tool                 | Jules API           | Description                                              |
+| -------------------- | ------------------- | -------------------------------------------------------- |
+| `jules_list_sources` | `GET /sources`      | List connected GitHub repos. Returns name, repo details. |
+| `jules_get_source`   | `GET /sources/{id}` | Get details for a specific source.                       |
 
 ### Sessions (5 tools)
 
-| Tool | Jules API | Description |
-|------|-----------|-------------|
-| `jules_create_session` | `POST /sessions` | Create a coding task. Params: `prompt` (required), `source` (required — source name), `starting_branch` (required), `title` (optional), `require_plan_approval` (optional, default **true**), `automation_mode` (optional — `AUTO_CREATE_PR` to auto-PR). |
-| `jules_list_sessions` | `GET /sessions` | List sessions with pagination. Params: `page_size` (optional), `page_token` (optional). |
-| `jules_get_session` | `GET /sessions/{id}` | Get session status, state, outputs. Use to poll progress or check for PR links. |
-| `jules_approve_plan` | `POST /sessions/{id}:approvePlan` | Approve a pending plan. Only valid when state is `AWAITING_PLAN_APPROVAL`. |
-| `jules_send_message` | `POST /sessions/{id}:sendMessage` | Send feedback/instructions to Jules. Used when state is `AWAITING_USER_FEEDBACK` or to provide additional context. Params: `message` (required). |
+| Tool                   | Jules API                         | Description                                                                                                                                                                                                                                               |
+| ---------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_create_session` | `POST /sessions`                  | Create a coding task. Params: `prompt` (required), `source` (required — source name), `starting_branch` (required), `title` (optional), `require_plan_approval` (optional, default **true**), `automation_mode` (optional — `AUTO_CREATE_PR` to auto-PR). |
+| `jules_list_sessions`  | `GET /sessions`                   | List sessions with pagination. Params: `page_size` (optional), `page_token` (optional).                                                                                                                                                                   |
+| `jules_get_session`    | `GET /sessions/{id}`              | Get session status, state, outputs. Use to poll progress or check for PR links.                                                                                                                                                                           |
+| `jules_approve_plan`   | `POST /sessions/{id}:approvePlan` | Approve a pending plan. Only valid when state is `AWAITING_PLAN_APPROVAL`.                                                                                                                                                                                |
+| `jules_send_message`   | `POST /sessions/{id}:sendMessage` | Send feedback/instructions to Jules. Used when state is `AWAITING_USER_FEEDBACK` or to provide additional context. Params: `message` (required).                                                                                                          |
 
 ### Activities (2 tools)
 
-| Tool | Jules API | Description |
-|------|-----------|-------------|
-| `jules_list_activities` | `GET /sessions/{id}/activities` | List activity log for a session. Shows messages, plans, progress updates, completion/failure. Params: `session_id` (required), `page_size` (optional), `page_token` (optional). |
-| `jules_get_activity` | `GET /sessions/{id}/activities/{activity_id}` | Get a single activity with full detail — includes artifacts (changesets, git patches, bash output, media). |
+| Tool                    | Jules API                                     | Description                                                                                                                                                                     |
+| ----------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_list_activities` | `GET /sessions/{id}/activities`               | List activity log for a session. Shows messages, plans, progress updates, completion/failure. Params: `session_id` (required), `page_size` (optional), `page_token` (optional). |
+| `jules_get_activity`    | `GET /sessions/{id}/activities/{activity_id}` | Get a single activity with full detail — includes artifacts (changesets, git patches, bash output, media).                                                                      |
 
 ### Scheduling (2 tools)
 
-| Tool | Jules API | Description |
-|------|-----------|-------------|
-| `jules_schedule_task` | N/A (server-side) | Schedule a recurring coding task. Params: `cron` (cron expression), `prompt` (required), `source` (required), `starting_branch` (required), `label` (human-readable name), `require_plan_approval` (optional, default true), `automation_mode` (optional). Schedules are persisted locally with AES-256-GCM encryption. |
-| `jules_list_schedules` | N/A (server-side) | List/manage scheduled tasks. Params: `action` (`list` / `delete`), `schedule_id` (for delete). |
+| Tool                   | Jules API         | Description                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_schedule_task`  | N/A (server-side) | Schedule a recurring coding task. Params: `cron` (cron expression), `prompt` (required), `source` (required), `starting_branch` (required), `label` (human-readable name), `require_plan_approval` (optional, default true), `automation_mode` (optional). Schedules are persisted locally with AES-256-GCM encryption. |
+| `jules_list_schedules` | N/A (server-side) | List/manage scheduled tasks. Params: `action` (`list` / `delete`), `schedule_id` (for delete).                                                                                                                                                                                                                          |
 
 ### Convenience (1 tool)
 
-| Tool | Jules API | Description |
-|------|-----------|-------------|
+| Tool             | Jules API | Description                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `jules_run_task` | composite | Create a session, poll until plan is ready, auto-approve, poll until completion, return results. One-shot "fire and forget" for when you trust Jules to just do the thing. Params: same as `create_session` plus `auto_approve` (default true), `poll_interval_ms` (default 5000), `timeout_ms` (default 600000 / 10 min). Reports progress via MCP progress notifications. |
 
 ## Tool Design Notes
 
 ### Input conventions
+
 - `session_id` accepts either bare ID or full resource name (`sessions/abc123`)
 - `source` accepts either bare name or full resource name (`sources/github/owner/repo`)
 - Server normalizes both forms before hitting the API
 
 ### Output formatting
+
 - Sessions: return state prominently, with human-readable state descriptions
 - Plans: format steps as numbered list with titles and descriptions
 - Activities: format by type — quote agent messages, show plan steps, summarize progress
@@ -98,7 +101,9 @@ Key states:
 - Git patches: include but truncate large diffs (show first 50 lines + "N more lines")
 
 ### Error handling
+
 Structured error types following the DO/Porkbun MCP pattern:
+
 - `JulesAPIError` — base, with `message`, `statusCode`, `hint` fields
 - `JulesAuthError` — 401/403 (expired? disabled? wrong key?)
 - `JulesNotFoundError` — 404 (session/source not found, echo the ID used)
@@ -108,7 +113,9 @@ Structured error types following the DO/Porkbun MCP pattern:
 Tools catch these and return structured JSON `{"status": "ERROR", "message": ..., "code": ...}` — exceptions never propagate raw.
 
 ### Mutation parameters
+
 Following the house pattern from DO/Porkbun MCP servers:
+
 - **`reason`** (required string) on all mutation tools: `create_session`, `approve_plan`,
   `send_message`, `schedule_task`. Flows into audit logging.
 - **`dry_run`** (optional boolean, default false) on `create_session` and `schedule_task`.
@@ -117,6 +124,7 @@ Following the house pattern from DO/Porkbun MCP servers:
 ## Audit & Observability
 
 ### Inkwell changelog logging
+
 All mutations emit to `/opt/inkwell/changes.db` via `inkwell-emit`, following the
 same pattern as the DO and Porkbun MCP servers:
 
@@ -138,6 +146,7 @@ Fallback: if `inkwell-emit` is not available (public distribution), write JSONL 
 `~/.local/share/jules-mcp/audit.jsonl` instead.
 
 ### Metrics
+
 Pass through any rate-limit headers from the Jules API in tool responses.
 No Prometheus/StatsD for v1 — revisit if we go remote HTTP.
 
@@ -195,28 +204,28 @@ jules-mcp/
 
 ## What We're Taking from Each Community Repo
 
-| Idea | Source | Adaptation |
-|------|--------|------------|
-| Clean 8-tool API surface mapping | Omarbadran37 | Expanded to 12 tools (activities split, scheduling, convenience). Proper input normalization. |
-| Test infrastructure (Vitest + smoke tests) | savethepolarbears | Vitest for unit tests. Smoke test script that hits real API. |
-| Structured project layout | savethepolarbears | Similar separation — `tools/`, `scheduler/`, `types`. |
-| Security: never log API keys, generic error messages | savethepolarbears | Key from env var, never in logs. |
-| In-process cron scheduling | savethepolarbears | Keeping this — not everyone uses n8n. Encrypted persistence with AES-256-GCM. |
-| **NOT taking**: Cookie auth, browser automation | samihalawa | Hard no — fragile, ToS-violating |
-| **NOT taking**: Activepieces integration | savethepolarbears | Out of scope — keep the server platform-agnostic |
-| **NOT taking**: Build artifacts in repo | Omarbadran37 | Proper .gitignore, build on install |
+| Idea                                                 | Source            | Adaptation                                                                                    |
+| ---------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
+| Clean 8-tool API surface mapping                     | Omarbadran37      | Expanded to 12 tools (activities split, scheduling, convenience). Proper input normalization. |
+| Test infrastructure (Vitest + smoke tests)           | savethepolarbears | Vitest for unit tests. Smoke test script that hits real API.                                  |
+| Structured project layout                            | savethepolarbears | Similar separation — `tools/`, `scheduler/`, `types`.                                         |
+| Security: never log API keys, generic error messages | savethepolarbears | Key from env var, never in logs.                                                              |
+| In-process cron scheduling                           | savethepolarbears | Keeping this — not everyone uses n8n. Encrypted persistence with AES-256-GCM.                 |
+| **NOT taking**: Cookie auth, browser automation      | samihalawa        | Hard no — fragile, ToS-violating                                                              |
+| **NOT taking**: Activepieces integration             | savethepolarbears | Out of scope — keep the server platform-agnostic                                              |
+| **NOT taking**: Build artifacts in repo              | Omarbadran37      | Proper .gitignore, build on install                                                           |
 
 ## House Patterns (from existing SimmonsSystems MCP servers)
 
-| Pattern | Implementation |
-|---------|---------------|
-| Inkwell audit logging | `inkwell-emit` CLI with JSONL fallback |
-| `reason` on mutations | Required string param on create/approve/send/schedule |
+| Pattern                | Implementation                                             |
+| ---------------------- | ---------------------------------------------------------- |
+| Inkwell audit logging  | `inkwell-emit` CLI with JSONL fallback                     |
+| `reason` on mutations  | Required string param on create/approve/send/schedule      |
 | `dry_run` on mutations | Optional bool, returns `would_request` without calling API |
-| Structured errors | Typed error classes with `message`, `statusCode`, `hint` |
-| Error response shape | `{"status": "ERROR", "message": ..., "code": ...}` |
-| Emit on failure too | `POST_FAIL` action in audit log |
-| Swallow audit failures | Audit issues never block the mutation |
+| Structured errors      | Typed error classes with `message`, `statusCode`, `hint`   |
+| Error response shape   | `{"status": "ERROR", "message": ..., "code": ...}`         |
+| Emit on failure too    | `POST_FAIL` action in audit log                            |
+| Swallow audit failures | Audit issues never block the mutation                      |
 
 ## Decisions (Resolved)
 

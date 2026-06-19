@@ -67,10 +67,10 @@ npm test           # 64 unit tests
 
 The server reads two environment variables:
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `JULES_API_KEY` | **yes** | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it. |
-| `JULES_ENCRYPTION_KEY` | no | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`). |
+| Variable               | Required | Purpose                                                                                                                                                                 |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                        |
+| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`). |
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
@@ -80,18 +80,18 @@ Register it as an MCP server (e.g. in a project's `.claude/settings.json` or you
 
 ```json
 {
-  "mcpServers": {
-    "jules": {
-      "command": "node",
-      "args": ["dist/index.js"],
-      "cwd": "/absolute/path/to/jules-mcp",
-      "env": { "JULES_API_KEY": "${JULES_API_KEY}" }
+    "mcpServers": {
+        "jules": {
+            "command": "node",
+            "args": ["dist/index.js"],
+            "cwd": "/absolute/path/to/jules-mcp",
+            "env": { "JULES_API_KEY": "${JULES_API_KEY}" }
+        }
     }
-  }
 }
 ```
 
-Then ask your assistant things like *"list my Jules sources"*, *"create a Jules task on owner/repo to add tests for X"*, or *"show me the diff Jules produced for session 123"*.
+Then ask your assistant things like _"list my Jules sources"_, _"create a Jules task on owner/repo to add tests for X"_, or _"show me the diff Jules produced for session 123"_.
 
 ## Tool reference
 
@@ -99,41 +99,41 @@ Then ask your assistant things like *"list my Jules sources"*, *"create a Jules 
 
 ### Sources
 
-| Tool | Description | Key params |
-|---|---|---|
-| `jules_list_sources` | List connected GitHub repos available to Jules. | — |
-| `jules_get_source` | Get details for one source. | `source` |
+| Tool                 | Description                                     | Key params |
+| -------------------- | ----------------------------------------------- | ---------- |
+| `jules_list_sources` | List connected GitHub repos available to Jules. | —          |
+| `jules_get_source`   | Get details for one source.                     | `source`   |
 
 ### Sessions
 
-| Tool | Description | Key params |
-|---|---|---|
-| `jules_create_session` ✎🔍 | Start a coding task. | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?` |
-| `jules_list_sessions` | List sessions. Filter by repo, browse compactly, or annotate with change status. | `page_size?`, `page_token?`, `source?` (filter by repo), `compact?` (one line each), `detect_changes?` (annotate file counts), `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set) |
-| `jules_get_session` | Get one session's state, outputs, PR links. | `session_id` |
-| `jules_approve_plan` ✎ | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason` |
-| `jules_send_message` ✎ | Send feedback / a follow-up prompt to a session. | `session_id`, `message`, `reason` |
+| Tool                       | Description                                                                                                               | Key params                                                                                                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_create_session` ✎🔍 | Start a coding task.                                                                                                      | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?`                                             |
+| `jules_list_sessions`      | List sessions. Filter by repo, browse compactly, or annotate with change status.                                          | `page_size?`, `page_token?`, `source?` (filter by repo), `compact?` (one line each), `detect_changes?` (annotate file counts), `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set) |
+| `jules_get_session`        | Get one session's state, outputs, PR links.                                                                               | `session_id`                                                                                                                                                                                          |
+| `jules_approve_plan` ✎     | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason`                                                                                                                                                                                |
+| `jules_send_message` ✎     | Send feedback / a follow-up prompt to a session.                                                                          | `session_id`, `message`, `reason`                                                                                                                                                                     |
 
 ### Activities
 
-| Tool | Description | Key params |
-|---|---|---|
-| `jules_list_activities` | List a session's activity log (messages, plans, progress, results). | `session_id`, `page_size?`, `page_token?` |
-| `jules_get_activity` | Get one activity with full artifacts (changesets, git patches, bash output). | `session_id`, `activity_id` |
+| Tool                    | Description                                                                  | Key params                                |
+| ----------------------- | ---------------------------------------------------------------------------- | ----------------------------------------- |
+| `jules_list_activities` | List a session's activity log (messages, plans, progress, results).          | `session_id`, `page_size?`, `page_token?` |
+| `jules_get_activity`    | Get one activity with full artifacts (changesets, git patches, bash output). | `session_id`, `activity_id`               |
 
 ### Scheduling
 
-| Tool | Description | Key params |
-|---|---|---|
+| Tool                      | Description                                                                               | Key params                                                                                                                 |
+| ------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `jules_schedule_task` ✎🔍 | Schedule a recurring coding task (cron). Validates the cron expression before persisting. | `cron`, `prompt`, `source`, `starting_branch`, `label`, `require_plan_approval?`, `automation_mode?`, `reason`, `dry_run?` |
-| `jules_list_schedules` ✎ | `list` all schedules, or `delete` one. `reason` required for delete. | `action` (`list`\|`delete`), `schedule_id?`, `reason?` |
+| `jules_list_schedules` ✎  | `list` all schedules, or `delete` one. `reason` required for delete.                      | `action` (`list`\|`delete`), `schedule_id?`, `reason?`                                                                     |
 
 ### Convenience & review
 
-| Tool | Description | Key params |
-|---|---|---|
-| `jules_run_task` ✎ | One-shot: create → poll until the plan is ready → auto-approve → poll to completion → return the result. Returns early if it needs your input (`AWAITING_USER_FEEDBACK`, or `AWAITING_PLAN_APPROVAL` when `auto_approve=false`). | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (default true), `poll_interval_ms?` (5000), `timeout_ms?` (600000) |
-| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks). | `session_id`, `summary?` |
+| Tool                     | Description                                                                                                                                                                                                                      | Key params                                                                                                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` ✎       | One-shot: create → poll until the plan is ready → auto-approve → poll to completion → return the result. Returns early if it needs your input (`AWAITING_USER_FEEDBACK`, or `AWAITING_PLAN_APPROVAL` when `auto_approve=false`). | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (default true), `poll_interval_ms?` (5000), `timeout_ms?` (600000) |
+| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).              | `session_id`, `summary?`                                                                                                                                          |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
 
@@ -162,7 +162,7 @@ Or skip the babysitting with **`jules_run_task`**, which does create → approve
 
 `jules_get_session_diff` handles this for you — it walks the activities, picks the **last** (cumulative) changeset, strips binary patch blobs, and returns the plan + final diff in one readable block. Use it before approving a plan or opening a PR yourself. For a large changeset, pass `summary=true` to get just the list of changed files with `+/-` line counts instead of the full diff.
 
-**Finding the sessions for one repo:** `jules_list_sessions` returns *all* sessions across every connected repo, which can be a lot. Pass `source` to filter to one repo (it scans up to 10 pages by default to gather matches), `compact: true` for a one-line-per-session listing, and `detect_changes: true` to mark which sessions actually produced code vs. a plan only — e.g. `jules_list_sessions(source: "bfr-shift-dashboard", compact: true, detect_changes: true)`.
+**Finding the sessions for one repo:** `jules_list_sessions` returns _all_ sessions across every connected repo, which can be a lot. Pass `source` to filter to one repo (it scans up to 10 pages by default to gather matches), `compact: true` for a one-line-per-session listing, and `detect_changes: true` to mark which sessions actually produced code vs. a plan only — e.g. `jules_list_sessions(source: "bfr-shift-dashboard", compact: true, detect_changes: true)`.
 
 ## Scheduling recurring tasks
 
@@ -172,20 +172,20 @@ Schedules persist to `~/.local/share/jules-mcp/schedules.enc`, **encrypted with 
 
 ## Audit logging
 
-Every mutation can emit an audit record describing what happened and *why* (the required `reason`):
+Every mutation can emit an audit record describing what happened and _why_ (the required `reason`):
 
 - If an `inkwell-emit` binary is on `PATH` (the author's house audit tool), records go there.
 - Otherwise they fall back to JSONL at `~/.local/share/jules-mcp/audit.jsonl`.
 - Audit failures are **swallowed** — a logging problem never blocks a mutation.
 - API keys are never written to audit records.
 
-`dry_run: true` on `jules_create_session` / `jules_schedule_task` returns the exact request that *would* be sent, makes no API call, and writes no audit record.
+`dry_run: true` on `jules_create_session` / `jules_schedule_task` returns the exact request that _would_ be sent, makes no API call, and writes no audit record.
 
 ## Jules API quirks worth knowing
 
 These tripped us up while building against the live API; they're handled internally but are worth knowing if you extend the client:
 
-- **Activity union fields are top-level.** The activity payload (`planGenerated`, `progressUpdated`, `sessionCompleted`, …) is serialized as top-level fields on the Activity object — *not* nested under an `activity` key like the docs' tree implies.
+- **Activity union fields are top-level.** The activity payload (`planGenerated`, `progressUpdated`, `sessionCompleted`, …) is serialized as top-level fields on the Activity object — _not_ nested under an `activity` key like the docs' tree implies.
 - **proto3 omits defaults.** `PlanStep.index` is absent when `0`; `description` is absent when empty. Don't assume they're present.
 - **`sendMessage` uses `prompt`, not `message`.** The request body field is `prompt` (same as session creation). Sending `message` returns `400 Unknown name "message"`.
 - **Diffs live in activity artifacts**, not `session.outputs`; cumulative changesets repeat across `progressUpdated` activities, so the last artifact-bearing activity holds the complete diff.
@@ -229,13 +229,13 @@ Tests mock `fetch` and the filesystem, so the unit suite needs no API key. The s
 
 The client maps HTTP failures to typed errors, and tools return a consistent shape — `{ "status": "ERROR", "message": ..., "code": ... }` with `isError: true` — instead of throwing raw:
 
-| Error | When |
-|---|---|
-| `JulesAuthError` | `401` / `403` — bad, expired, or disabled key |
-| `JulesNotFoundError` | `404` — unknown session/source (echoes the id) |
-| `JulesRateLimitError` | `429` — includes `retry-after` when present |
-| `JulesStateError` | invalid state transition (e.g. approving a plan that isn't pending) |
-| `JulesAPIError` | any other non-2xx |
+| Error                 | When                                                                |
+| --------------------- | ------------------------------------------------------------------- |
+| `JulesAuthError`      | `401` / `403` — bad, expired, or disabled key                       |
+| `JulesNotFoundError`  | `404` — unknown session/source (echoes the id)                      |
+| `JulesRateLimitError` | `429` — includes `retry-after` when present                         |
+| `JulesStateError`     | invalid state transition (e.g. approving a plan that isn't pending) |
+| `JulesAPIError`       | any other non-2xx                                                   |
 
 Requests also carry a 30s timeout via `AbortSignal.timeout`.
 
