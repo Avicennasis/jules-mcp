@@ -10,6 +10,7 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerActivityTools } from './tools/activities.js';
 import { registerSchedulingTools } from './tools/scheduling.js';
 import { registerConvenienceTools } from './tools/convenience.js';
+import { registerDiffTools } from './tools/diff.js';
 
 const apiKey = process.env.JULES_API_KEY;
 if (!apiKey) {
@@ -36,6 +37,7 @@ registerSessionTools(server, client);
 registerActivityTools(server, client);
 registerSchedulingTools(server, manager);
 registerConvenienceTools(server, client);
+registerDiffTools(server, client);
 
 // Start scheduler
 manager.start();

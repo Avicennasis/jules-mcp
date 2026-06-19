@@ -38,7 +38,11 @@ export function formatPlan(plan: Plan): string {
   // index means step 0. Coerce to 0 before sorting/numbering.
   const steps = [...plan.steps]
     .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-    .map((s) => `${(s.index ?? 0) + 1}. ${s.title}\n   ${s.description}`)
+    .map((s) => {
+      const heading = `${(s.index ?? 0) + 1}. ${s.title}`;
+      // description is omitted by proto3 when empty
+      return s.description ? `${heading}\n   ${s.description}` : heading;
+    })
     .join('\n');
   return `${header}\n${steps}`;
 }
@@ -121,6 +125,83 @@ export function formatActivity(activity: Activity): string {
 
   if (activity.artifacts?.length) {
     parts.push(formatArtifacts(activity.artifacts));
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * Replace GIT binary patch blobs (e.g. compiled .pyc files) with a one-line
+ * summary per file, so a consolidated diff stays readable. Text hunks are
+ * preserved verbatim.
+ */
+export function stripBinaryHunks(diff: string): string {
+  const lines = diff.split('\n');
+  const out: string[] = [];
+  let inBinary = false;
+  let binaryFile = '';
+  for (const line of lines) {
+    if (line.startsWith('diff --git')) {
+      binaryFile = line.replace('diff --git ', '');
+      inBinary = false;
+      out.push(line);
+      continue;
+    }
+    if (line.startsWith('GIT binary patch')) {
+      inBinary = true;
+      out.push(`  [binary file ${binaryFile} — blob omitted]`);
+      continue;
+    }
+    if (inBinary) {
+      if (line.trim() === '') inBinary = false;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Consolidate a session and its activities into a single review-friendly view:
+ * the session header, the plan, and the FINAL cumulative changeset (binary
+ * blobs stripped). Jules re-reports the cumulative changeset on successive
+ * activities, so the last activity carrying changeset artifacts holds the
+ * complete final diff — earlier ones are subsets and are skipped to avoid
+ * duplication.
+ */
+export function formatSessionDiff(session: Session, activities: Activity[]): string {
+  const parts: string[] = [];
+  parts.push(`Session: ${session.title ?? session.id}`);
+  parts.push(`State: ${session.state} — ${describeState(session.state)}`);
+  parts.push(`Source: ${session.sourceContext.source}`);
+  parts.push(`URL: ${session.url}`);
+
+  const planActivity = activities.find((a) => a.planGenerated);
+  if (planActivity?.planGenerated) {
+    parts.push('');
+    parts.push(formatPlan(planActivity.planGenerated.plan));
+  }
+
+  const changeActivities = activities.filter((a) =>
+    a.artifacts?.some((art) => art.changeSet?.gitPatch),
+  );
+  const last = changeActivities[changeActivities.length - 1];
+
+  if (last?.artifacts) {
+    parts.push('');
+    parts.push('Changes:');
+    for (const art of last.artifacts) {
+      if (art.changeSet?.gitPatch) {
+        const p = art.changeSet.gitPatch;
+        if (p.suggestedCommitMessage) {
+          parts.push(`Commit: ${p.suggestedCommitMessage}`);
+        }
+        parts.push(stripBinaryHunks(p.unidiffPatch ?? ''));
+      }
+    }
+  } else {
+    parts.push('');
+    parts.push('(No code changes — session produced a plan only.)');
   }
 
   return parts.join('\n');

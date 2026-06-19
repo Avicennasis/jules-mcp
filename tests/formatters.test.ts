@@ -5,6 +5,8 @@ import {
   formatPlan,
   describeState,
   truncatePatch,
+  stripBinaryHunks,
+  formatSessionDiff,
 } from '../src/formatters.js';
 import type { Session, Activity, Plan } from '../src/types.js';
 
@@ -47,6 +49,17 @@ describe('formatPlan', () => {
     expect(result).toContain('1. Analyze code');
     expect(result).toContain('2. Write fix');
     expect(result).toContain('Read the files');
+  });
+
+  it('omits the description line when a step has no description', () => {
+    const plan: Plan = {
+      id: 'plan-3',
+      steps: [{ id: 's1', index: 0, title: 'No description step' }],
+      createTime: '2026-01-01T00:00:00Z',
+    };
+    const result = formatPlan(plan);
+    expect(result).toContain('1. No description step');
+    expect(result).not.toContain('undefined');
   });
 
   it('treats an omitted index as step 0 (proto3 omits default-value ints)', () => {
@@ -156,5 +169,87 @@ describe('formatActivity', () => {
       description: 'Something happened',
     };
     expect(formatActivity(activity)).toContain('Something happened');
+  });
+});
+
+describe('stripBinaryHunks', () => {
+  it('keeps text diffs unchanged', () => {
+    const diff = 'diff --git a/x.js b/x.js\n--- a/x.js\n+++ b/x.js\n@@ -1 +1 @@\n-old\n+new';
+    expect(stripBinaryHunks(diff)).toContain('+new');
+    expect(stripBinaryHunks(diff)).toContain('-old');
+  });
+
+  it('replaces a GIT binary patch blob with a one-line summary', () => {
+    const diff = [
+      'diff --git a/foo.pyc b/foo.pyc',
+      'new file mode 100644',
+      'GIT binary patch',
+      'literal 27824',
+      'zcmdUYdsG`)nqLV?=q(Tk5D!6tz#tyNJdN=a',
+      'zOje%u#(2ATEvG$c^=9@A',
+      '',
+      'diff --git a/bar.js b/bar.js',
+      '--- a/bar.js',
+      '+++ b/bar.js',
+      '@@ -1 +1 @@',
+      '+real change',
+    ].join('\n');
+    const out = stripBinaryHunks(diff);
+    expect(out).not.toContain('zcmdUYdsG');
+    expect(out).toContain('binary file');
+    expect(out).toContain('foo.pyc');
+    expect(out).toContain('+real change');
+  });
+});
+
+describe('formatSessionDiff', () => {
+  const session: Session = {
+    name: 'sessions/abc',
+    id: 'abc',
+    prompt: 'fix isEditable',
+    title: 'Untested function isEditable',
+    sourceContext: { source: 'sources/github/o/r' },
+    createTime: '2026-01-01T00:00:00Z',
+    updateTime: '2026-01-01T01:00:00Z',
+    state: 'COMPLETED',
+    url: 'https://jules.google/sessions/abc',
+  };
+
+  it('shows the plan and the final cumulative changeset', () => {
+    const activities: Activity[] = [
+      {
+        name: 's/abc/activities/1', id: '1', createTime: 't', originator: 'agent',
+        planGenerated: { plan: { id: 'p', createTime: 't', steps: [{ id: 's1', title: 'Do it', description: 'now' }] } },
+      },
+      {
+        name: 's/abc/activities/2', id: '2', createTime: 't', originator: 'agent',
+        progressUpdated: { title: 'wip', description: 'partial' },
+        artifacts: [{ changeSet: { source: 'sources/github/o/r', gitPatch: { unidiffPatch: 'diff --git a/f.js b/f.js\n+partial', baseCommitId: 'b', suggestedCommitMessage: 'wip' } } }],
+      },
+      {
+        name: 's/abc/activities/3', id: '3', createTime: 't', originator: 'agent',
+        sessionCompleted: {},
+        artifacts: [{ changeSet: { source: 'sources/github/o/r', gitPatch: { unidiffPatch: 'diff --git a/f.js b/f.js\n+final change', baseCommitId: 'b', suggestedCommitMessage: 'final commit' } } }],
+      },
+    ];
+    const out = formatSessionDiff(session, activities);
+    expect(out).toContain('Untested function isEditable');
+    expect(out).toContain('1. Do it');
+    expect(out).toContain('+final change');
+    expect(out).toContain('final commit');
+    // Uses the LAST (cumulative) changeset, not the intermediate one
+    expect(out).not.toContain('+partial');
+  });
+
+  it('notes when a session produced only a plan (no code)', () => {
+    const activities: Activity[] = [
+      {
+        name: 's/abc/activities/1', id: '1', createTime: 't', originator: 'agent',
+        planGenerated: { plan: { id: 'p', createTime: 't', steps: [{ id: 's1', title: 'Plan only', description: 'x' }] } },
+      },
+    ];
+    const out = formatSessionDiff(session, activities);
+    expect(out).toContain('Plan only');
+    expect(out.toLowerCase()).toContain('no code');
   });
 });

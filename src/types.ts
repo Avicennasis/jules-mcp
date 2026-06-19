@@ -72,7 +72,8 @@ export interface Source {
 export interface PlanStep {
   id: string;
   title: string;
-  description: string;
+  /** omitted by proto3 when empty */
+  description?: string;
   /** proto3 omits this when 0 (the default int value); treat absent as 0. */
   index?: number;
 }
