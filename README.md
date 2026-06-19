@@ -109,7 +109,7 @@ Then ask your assistant things like *"list my Jules sources"*, *"create a Jules 
 | Tool | Description | Key params |
 |---|---|---|
 | `jules_create_session` ✎🔍 | Start a coding task. | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?` |
-| `jules_list_sessions` | List sessions (paginated). | `page_size?`, `page_token?` |
+| `jules_list_sessions` | List sessions. Filter by repo, browse compactly, or annotate with change status. | `page_size?`, `page_token?`, `source?` (filter by repo), `compact?` (one line each), `detect_changes?` (annotate file counts), `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set) |
 | `jules_get_session` | Get one session's state, outputs, PR links. | `session_id` |
 | `jules_approve_plan` ✎ | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason` |
 | `jules_send_message` ✎ | Send feedback / a follow-up prompt to a session. | `session_id`, `message`, `reason` |
@@ -133,7 +133,7 @@ Then ask your assistant things like *"list my Jules sources"*, *"create a Jules 
 | Tool | Description | Key params |
 |---|---|---|
 | `jules_run_task` ✎ | One-shot: create → poll until the plan is ready → auto-approve → poll to completion → return the result. Returns early if it needs your input (`AWAITING_USER_FEEDBACK`, or `AWAITING_PLAN_APPROVAL` when `auto_approve=false`). | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (default true), `poll_interval_ms?` (5000), `timeout_ms?` (600000) |
-| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. | `session_id` |
+| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks). | `session_id`, `summary?` |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
 
@@ -160,7 +160,9 @@ Or skip the babysitting with **`jules_run_task`**, which does create → approve
 
 > **Heads-up:** `session.outputs` is frequently empty even when Jules made changes. The actual diffs live in **activity artifacts** (`changeSet.gitPatch.unidiffPatch`).
 
-`jules_get_session_diff` handles this for you — it walks the activities, picks the **last** (cumulative) changeset, strips binary patch blobs, and returns the plan + final diff in one readable block. Use it before approving a plan or opening a PR yourself.
+`jules_get_session_diff` handles this for you — it walks the activities, picks the **last** (cumulative) changeset, strips binary patch blobs, and returns the plan + final diff in one readable block. Use it before approving a plan or opening a PR yourself. For a large changeset, pass `summary=true` to get just the list of changed files with `+/-` line counts instead of the full diff.
+
+**Finding the sessions for one repo:** `jules_list_sessions` returns *all* sessions across every connected repo, which can be a lot. Pass `source` to filter to one repo (it scans up to 10 pages by default to gather matches), `compact: true` for a one-line-per-session listing, and `detect_changes: true` to mark which sessions actually produced code vs. a plan only — e.g. `jules_list_sessions(source: "bfr-shift-dashboard", compact: true, detect_changes: true)`.
 
 ## Scheduling recurring tasks
 

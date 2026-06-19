@@ -4,7 +4,13 @@ import type { JulesClient } from '../jules-client.js';
 import type { Session } from '../types.js';
 import { normalizeResourceName } from '../types.js';
 import { emitAudit } from '../audit.js';
-import { formatSession } from '../formatters.js';
+import {
+  formatSession,
+  formatSessionCompact,
+  summarizeChangeset,
+  changeSummaryLine,
+  type ChangeSummary,
+} from '../formatters.js';
 import { JulesAPIError, JulesStateError } from '../errors.js';
 
 function errorResponse(error: unknown) {
@@ -98,17 +104,83 @@ export function registerSessionTools(
 
   server.tool(
     'jules_list_sessions',
-    'List Jules coding sessions with pagination',
+    'List Jules coding sessions. Supports filtering by source repo, a compact one-line-per-session mode, optional change detection, and multi-page scanning.',
     {
-      page_size: z.number().optional().describe('Number of sessions to return'),
-      page_token: z.string().optional().describe('Pagination token from previous response'),
+      page_size: z.number().optional().describe('Number of sessions to return per API page'),
+      page_token: z.string().optional().describe('Pagination token from a previous response'),
+      source: z.string().optional().describe('Filter to sessions whose source matches this value (case-insensitive substring, e.g. "bfr-shift-dashboard" or "owner/repo"). Applied client-side across scanned pages.'),
+      compact: z.boolean().default(false).describe('Return a one-line summary per session (state, id, source, title) instead of the full prompt block. Far smaller output for browsing.'),
+      detect_changes: z.boolean().default(false).describe('Annotate each returned session with whether it produced code changes and how many files. Costs one extra API call per returned session.'),
+      max_pages: z.number().optional().describe('Auto-follow pagination up to this many pages before returning. Defaults to 1, or 10 when `source` is set (to gather matches across pages). Hard-capped at 20.'),
     },
-    async ({ page_size, page_token }) => {
+    async ({ page_size, page_token, source, compact, detect_changes, max_pages }) => {
       try {
-        const result = await client.listSessions(page_size, page_token);
-        const text = result.sessions.map(formatSession).join('\n\n---\n\n');
-        const response: any = { status: 'OK', count: result.sessions.length };
-        if (result.nextPageToken) response.nextPageToken = result.nextPageToken;
+        // When filtering by source, scan more pages by default so matches
+        // aren't missed just because they're past page 1.
+        const cap = Math.min(max_pages ?? (source ? 10 : 1), 20);
+
+        const collected: Session[] = [];
+        let token = page_token;
+        let pagesFetched = 0;
+        let lastNextToken: string | undefined;
+        do {
+          const result = await client.listSessions(page_size, token);
+          collected.push(...result.sessions);
+          lastNextToken = result.nextPageToken;
+          token = result.nextPageToken;
+          pagesFetched++;
+        } while (token && pagesFetched < cap);
+
+        const needle = source?.toLowerCase();
+        const sessions = needle
+          ? collected.filter((s) =>
+              s.sourceContext.source.toLowerCase().includes(needle),
+            )
+          : collected;
+
+        // Optional change detection — one activities fetch per session,
+        // with bounded concurrency to stay friendly to the API.
+        const changeMap = new Map<string, ChangeSummary>();
+        if (detect_changes && sessions.length) {
+          const CONCURRENCY = 4;
+          for (let i = 0; i < sessions.length; i += CONCURRENCY) {
+            const slice = sessions.slice(i, i + CONCURRENCY);
+            const summaries = await Promise.all(
+              slice.map(async (s) => {
+                try {
+                  const { activities } = await client.listActivities(s.id, 200);
+                  return [s.id, summarizeChangeset(activities)] as const;
+                } catch {
+                  return [s.id, undefined] as const;
+                }
+              }),
+            );
+            for (const [id, summary] of summaries) {
+              if (summary) changeMap.set(id, summary);
+            }
+          }
+        }
+
+        const text = sessions
+          .map((s) => {
+            const change = changeMap.get(s.id);
+            if (compact) return formatSessionCompact(s, change);
+            const block = formatSession(s);
+            return change ? `${block}\n${changeSummaryLine(change)}` : block;
+          })
+          .join(compact ? '\n' : '\n\n---\n\n');
+
+        const response: Record<string, unknown> = {
+          status: 'OK',
+          count: sessions.length,
+          pagesFetched,
+        };
+        if (needle) {
+          response.filteredBy = source;
+          response.scanned = collected.length;
+        }
+        if (lastNextToken) response.nextPageToken = lastNextToken;
+
         return {
           content: [
             { type: 'text' as const, text: `${JSON.stringify(response)}\n\n${text}` },

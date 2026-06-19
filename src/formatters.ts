@@ -47,6 +47,128 @@ export function formatPlan(plan: Plan): string {
   return `${header}\n${steps}`;
 }
 
+/** Per-file insertion/deletion tally parsed from a unified diff. */
+export interface FileChange {
+  file: string;
+  insertions: number;
+  deletions: number;
+}
+
+/** Lightweight summary of a session's final changeset, derived from activities. */
+export interface ChangeSummary {
+  hasChanges: boolean;
+  changedFiles: number;
+  insertions: number;
+  deletions: number;
+  files: FileChange[];
+  commitMessage?: string;
+}
+
+/**
+ * Summarize the FINAL cumulative changeset across a session's activities
+ * without emitting the full diff: which files changed and their +/- line
+ * counts. Jules re-reports the cumulative changeset on successive activities,
+ * so the last activity carrying changeset artifacts holds the complete final
+ * diff. Binary blobs are ignored. Use this for triage and the `hasChanges`
+ * signal in listings, where the raw diff would be too large.
+ */
+export function summarizeChangeset(activities: Activity[]): ChangeSummary {
+  const empty: ChangeSummary = {
+    hasChanges: false,
+    changedFiles: 0,
+    insertions: 0,
+    deletions: 0,
+    files: [],
+  };
+
+  const changeActivities = activities.filter((a) =>
+    a.artifacts?.some((art) => art.changeSet?.gitPatch),
+  );
+  const last = changeActivities[changeActivities.length - 1];
+  if (!last?.artifacts) return empty;
+
+  const files: FileChange[] = [];
+  let current: FileChange | undefined;
+  let commitMessage: string | undefined;
+  let insertions = 0;
+  let deletions = 0;
+
+  for (const art of last.artifacts) {
+    const gp = art.changeSet?.gitPatch;
+    if (!gp) continue;
+    if (gp.suggestedCommitMessage && !commitMessage) {
+      commitMessage = gp.suggestedCommitMessage;
+    }
+    let inBinary = false;
+    for (const line of (gp.unidiffPatch ?? '').split('\n')) {
+      if (line.startsWith('diff --git ')) {
+        const match = line.match(/ b\/(.+)$/);
+        current = {
+          file: match ? match[1] : line.replace('diff --git ', ''),
+          insertions: 0,
+          deletions: 0,
+        };
+        files.push(current);
+        inBinary = false;
+        continue;
+      }
+      if (line.startsWith('GIT binary patch')) {
+        inBinary = true;
+        continue;
+      }
+      if (inBinary) {
+        if (line.trim() === '') inBinary = false;
+        continue;
+      }
+      // Skip file headers so they aren't counted as content lines.
+      if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
+      if (line.startsWith('+')) {
+        if (current) current.insertions++;
+        insertions++;
+      } else if (line.startsWith('-')) {
+        if (current) current.deletions++;
+        deletions++;
+      }
+    }
+  }
+
+  return {
+    hasChanges: files.length > 0,
+    changedFiles: files.length,
+    insertions,
+    deletions,
+    files,
+    commitMessage,
+  };
+}
+
+/** One-line trailing annotation describing a session's changeset. */
+export function changeSummaryLine(change: ChangeSummary): string {
+  if (!change.hasChanges) return 'Changes: none (plan only)';
+  const files = `${change.changedFiles} file${change.changedFiles === 1 ? '' : 's'}`;
+  return `Changes: ${files}, +${change.insertions}/-${change.deletions}`;
+}
+
+/**
+ * Compact one-line summary of a session for browsing long lists: state, id,
+ * source (with the `sources/github/` prefix trimmed), and title. An optional
+ * change summary appends a file count. Designed to stay greppable.
+ */
+export function formatSessionCompact(
+  session: Session,
+  change?: ChangeSummary,
+): string {
+  const source = session.sourceContext.source.replace(/^sources\/github\//, '');
+  const title = session.title ?? session.id;
+  let line = `${session.state}  ${session.id}  ${source}  ::  ${title}`;
+  if (change) {
+    line += change.hasChanges
+      ? `  (${change.changedFiles} file${change.changedFiles === 1 ? '' : 's'})`
+      : '  (no changes)';
+  }
+  return line;
+}
+
 export function formatSession(session: Session): string {
   const parts: string[] = [];
 
@@ -202,6 +324,48 @@ export function formatSessionDiff(session: Session, activities: Activity[]): str
   } else {
     parts.push('');
     parts.push('(No code changes — session produced a plan only.)');
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * Compact, review-friendly summary of a session: header, plan size, and a
+ * per-file +/- breakdown of the final changeset WITHOUT the raw diff hunks.
+ * Use for large changesets or quick triage when the full
+ * `formatSessionDiff` output would be too large.
+ */
+export function summarizeSessionDiff(
+  session: Session,
+  activities: Activity[],
+): string {
+  const parts: string[] = [];
+  parts.push(`Session: ${session.title ?? session.id}`);
+  parts.push(`State: ${session.state} — ${describeState(session.state)}`);
+  parts.push(`Source: ${session.sourceContext.source}`);
+  parts.push(`URL: ${session.url}`);
+
+  const planActivity = activities.find((a) => a.planGenerated);
+  if (planActivity?.planGenerated) {
+    const stepCount = planActivity.planGenerated.plan.steps.length;
+    parts.push(`Plan: ${stepCount} step${stepCount === 1 ? '' : 's'}`);
+  }
+
+  const change = summarizeChangeset(activities);
+  parts.push('');
+  if (!change.hasChanges) {
+    parts.push('(No code changes — session produced a plan only.)');
+    return parts.join('\n');
+  }
+
+  if (change.commitMessage) {
+    parts.push(`Commit: ${change.commitMessage.split('\n')[0]}`);
+  }
+  parts.push(
+    `Changes: ${change.changedFiles} file${change.changedFiles === 1 ? '' : 's'}, +${change.insertions}/-${change.deletions}`,
+  );
+  for (const f of change.files) {
+    parts.push(`  ${f.file}  (+${f.insertions}/-${f.deletions})`);
   }
 
   return parts.join('\n');

@@ -62,6 +62,18 @@ describe('diff tools', () => {
     expect(result.content[0].text).toContain('commit msg');
   });
 
+  it('returns a files-and-counts summary when summary=true (no raw hunks)', async () => {
+    const handler = registeredTools.get('jules_get_session_diff')!.handler;
+    const result = await handler({ session_id: 'abc', summary: true });
+    const text = result.content[0].text;
+    expect(text).toContain('Fix the thing');
+    expect(text).toContain('Changes: 1 file, +1/-0');
+    expect(text).toContain('f.js  (+1/-0)');
+    expect(text).toContain('Commit: commit msg');
+    // the raw added line should NOT be present in summary mode
+    expect(text).not.toContain('+the change');
+  });
+
   it('returns a structured error when the session is not found', async () => {
     const { JulesNotFoundError } = await import('../../src/errors.js');
     (mockClient.getSession as any).mockRejectedValueOnce(new JulesNotFoundError('sessions/nope'));
