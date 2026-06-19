@@ -3,7 +3,6 @@ import type {
   Activity,
   Plan,
   SessionState,
-  ActivityType,
   Artifact,
 } from './types.js';
 
@@ -35,9 +34,11 @@ export function truncatePatch(patch: string, maxLines = 50): string {
 
 export function formatPlan(plan: Plan): string {
   const header = `Plan ${plan.id}:`;
+  // proto3 omits `index` when it is 0 (the default int value), so a missing
+  // index means step 0. Coerce to 0 before sorting/numbering.
   const steps = [...plan.steps]
-    .sort((a, b) => a.index - b.index)
-    .map((s) => `${s.index + 1}. ${s.title}\n   ${s.description}`)
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    .map((s) => `${(s.index ?? 0) + 1}. ${s.title}\n   ${s.description}`)
     .join('\n');
   return `${header}\n${steps}`;
 }
@@ -97,23 +98,25 @@ export function formatActivity(activity: Activity): string {
   const parts: string[] = [];
   const time = activity.createTime;
 
-  const act = activity.activity;
-
-  if ('agentMessaged' in act) {
-    parts.push(`[${time}] Agent: ${act.agentMessaged.agentMessage}`);
-  } else if ('userMessaged' in act) {
-    parts.push(`[${time}] User: ${act.userMessaged.userMessage}`);
-  } else if ('planGenerated' in act) {
+  // Union members are top-level fields on the activity (protobuf oneof
+  // flattened in JSON). Exactly one is present.
+  if (activity.agentMessaged) {
+    parts.push(`[${time}] Agent: ${activity.agentMessaged.agentMessage}`);
+  } else if (activity.userMessaged) {
+    parts.push(`[${time}] User: ${activity.userMessaged.userMessage}`);
+  } else if (activity.planGenerated) {
     parts.push(`[${time}] Plan generated:`);
-    parts.push(formatPlan(act.planGenerated.plan));
-  } else if ('planApproved' in act) {
-    parts.push(`[${time}] Plan approved (${act.planApproved.planId})`);
-  } else if ('progressUpdated' in act) {
-    parts.push(`[${time}] Progress: ${act.progressUpdated.title} — ${act.progressUpdated.description}`);
-  } else if ('sessionCompleted' in act) {
+    parts.push(formatPlan(activity.planGenerated.plan));
+  } else if (activity.planApproved) {
+    parts.push(`[${time}] Plan approved (${activity.planApproved.planId})`);
+  } else if (activity.progressUpdated) {
+    parts.push(`[${time}] Progress: ${activity.progressUpdated.title} — ${activity.progressUpdated.description}`);
+  } else if (activity.sessionCompleted) {
     parts.push(`[${time}] Session completed`);
-  } else if ('sessionFailed' in act) {
-    parts.push(`[${time}] Session failed: ${act.sessionFailed.reason}`);
+  } else if (activity.sessionFailed) {
+    parts.push(`[${time}] Session failed: ${activity.sessionFailed.reason}`);
+  } else {
+    parts.push(`[${time}] ${activity.description || 'Activity'}`);
   }
 
   if (activity.artifacts?.length) {

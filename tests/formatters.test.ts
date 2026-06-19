@@ -48,6 +48,22 @@ describe('formatPlan', () => {
     expect(result).toContain('2. Write fix');
     expect(result).toContain('Read the files');
   });
+
+  it('treats an omitted index as step 0 (proto3 omits default-value ints)', () => {
+    // The real Jules API omits `index` on the first step (index 0).
+    const plan: Plan = {
+      id: 'plan-2',
+      steps: [
+        { id: 's1', title: 'First step', description: 'no index field' },
+        { id: 's2', index: 1, title: 'Second step', description: 'has index' },
+      ],
+      createTime: '2026-01-01T00:00:00Z',
+    };
+    const result = formatPlan(plan);
+    expect(result).toContain('1. First step');
+    expect(result).toContain('2. Second step');
+    expect(result).not.toContain('NaN');
+  });
 });
 
 describe('formatSession', () => {
@@ -77,10 +93,9 @@ describe('formatActivity', () => {
     const activity: Activity = {
       name: 'sessions/abc/activities/1',
       id: '1',
-      description: 'Agent spoke',
       createTime: '2026-01-01T00:00:00Z',
       originator: 'agent',
-      activity: { agentMessaged: { agentMessage: 'I found the bug' } },
+      agentMessaged: { agentMessage: 'I found the bug' },
     };
     const result = formatActivity(activity);
     expect(result).toContain('I found the bug');
@@ -91,21 +106,55 @@ describe('formatActivity', () => {
     const activity: Activity = {
       name: 'sessions/abc/activities/2',
       id: '2',
-      description: 'Plan created',
       createTime: '2026-01-01T00:00:00Z',
       originator: 'agent',
-      activity: {
-        planGenerated: {
-          plan: {
-            id: 'p1',
-            steps: [{ id: 's1', index: 0, title: 'Step 1', description: 'Do thing' }],
-            createTime: '2026-01-01T00:00:00Z',
-          },
+      planGenerated: {
+        plan: {
+          id: 'p1',
+          steps: [{ id: 's1', index: 0, title: 'Step 1', description: 'Do thing' }],
+          createTime: '2026-01-01T00:00:00Z',
         },
       },
     };
     const result = formatActivity(activity);
     expect(result).toContain('Plan');
     expect(result).toContain('Step 1');
+  });
+
+  it('formats a progressUpdated activity that also carries a changeset (real wire shape)', () => {
+    const activity: Activity = {
+      name: 'sessions/abc/activities/3',
+      id: '3',
+      createTime: '2026-01-01T00:00:00Z',
+      originator: 'agent',
+      progressUpdated: { title: 'Updated isEditable', description: 'Used a while loop' },
+      artifacts: [
+        {
+          changeSet: {
+            source: 'sources/github/o/r',
+            gitPatch: {
+              unidiffPatch: 'diff --git a/src/content.js b/src/content.js\n+  hello',
+              baseCommitId: 'abc123',
+              suggestedCommitMessage: 'fix isEditable',
+            },
+          },
+        },
+      ],
+    };
+    const result = formatActivity(activity);
+    expect(result).toContain('Progress');
+    expect(result).toContain('Updated isEditable');
+    expect(result).toContain('src/content.js');
+  });
+
+  it('falls back to description when no union member is present', () => {
+    const activity: Activity = {
+      name: 'sessions/abc/activities/4',
+      id: '4',
+      createTime: '2026-01-01T00:00:00Z',
+      originator: 'agent',
+      description: 'Something happened',
+    };
+    expect(formatActivity(activity)).toContain('Something happened');
   });
 });

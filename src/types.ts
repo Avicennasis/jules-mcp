@@ -73,7 +73,8 @@ export interface PlanStep {
   id: string;
   title: string;
   description: string;
-  index: number;
+  /** proto3 omits this when 0 (the default int value); treat absent as 0. */
+  index?: number;
 }
 
 export interface Plan {
@@ -137,23 +138,29 @@ export interface SessionFailed {
   reason: string;
 }
 
-export type ActivityType =
-  | { agentMessaged: AgentMessaged }
-  | { userMessaged: UserMessaged }
-  | { planGenerated: PlanGenerated }
-  | { planApproved: PlanApproved }
-  | { progressUpdated: ProgressUpdated }
-  | { sessionCompleted: SessionCompleted }
-  | { sessionFailed: SessionFailed };
-
+/**
+ * Activity resource. The Jules API models the activity payload as a protobuf
+ * `oneof`; on the JSON wire format the members are serialized as TOP-LEVEL
+ * fields on the Activity object (NOT nested under an `activity` key). Exactly
+ * one of the union members below is present per activity. `artifacts` can
+ * accompany any of them (e.g. a `progressUpdated` activity that also carries a
+ * changeset). `description` is frequently absent.
+ */
 export interface Activity {
   name: string;
   id: string;
-  description: string;
+  description?: string;
   createTime: string;
   originator: string;
   artifacts?: Artifact[];
-  activity: ActivityType;
+  // oneof "activity" — exactly one present, at the top level
+  agentMessaged?: AgentMessaged;
+  userMessaged?: UserMessaged;
+  planGenerated?: PlanGenerated;
+  planApproved?: PlanApproved;
+  progressUpdated?: ProgressUpdated;
+  sessionCompleted?: SessionCompleted;
+  sessionFailed?: SessionFailed;
 }
 
 // --- Scheduling ---

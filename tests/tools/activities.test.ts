@@ -9,7 +9,7 @@ const mockActivity: Activity = {
   description: 'Agent sent message',
   createTime: '2026-01-01T00:00:00Z',
   originator: 'agent',
-  activity: { agentMessaged: { agentMessage: 'Found the bug' } },
+  agentMessaged: { agentMessage: 'Found the bug' },
 };
 
 describe('activity tools', () => {
