@@ -165,7 +165,8 @@ export function formatSessionCompact(
         '',
     );
     const title = session.title ?? session.id;
-    let line = `${session.state}  ${session.id}  ${source}  ::  ${title}`;
+    const archived = session.archived ? ' [archived]' : '';
+    let line = `${session.state}${archived}  ${session.id}  ${source}  ::  ${title}`;
     if (change) {
         line += change.hasChanges
             ? `  (${change.changedFiles} file${change.changedFiles === 1 ? '' : 's'})`
@@ -180,6 +181,7 @@ export function formatSession(session: Session): string {
     parts.push(`Session: ${session.title ?? session.id}`);
     parts.push(`ID: ${session.id}`);
     parts.push(`State: ${session.state} — ${describeState(session.state)}`);
+    if (session.archived) parts.push('Archived: true');
     parts.push(`Prompt: ${session.prompt}`);
     parts.push(`Source: ${session.sourceContext.source}`);
     parts.push(`URL: ${session.url}`);

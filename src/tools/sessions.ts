@@ -380,4 +380,150 @@ export function registerSessionTools(
             }
         },
     );
+
+    server.tool(
+        'jules_archive_session',
+        'Archive a Jules session to close it out and hide it from the active list. Reversible via jules_unarchive_session.',
+        {
+            session_id: z.string().describe('Session ID or full resource name'),
+            reason: z
+                .string()
+                .describe('Why this session is being archived (for audit log)'),
+        },
+        async ({ session_id, reason }) => {
+            try {
+                const session = await client.archiveSession(session_id);
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'POST',
+                    service: session.sourceContext.source,
+                    reason,
+                    target: session.id,
+                    payload: { archived: true },
+                });
+                return {
+                    content: [
+                        { type: 'text' as const, text: formatSession(session) },
+                    ],
+                };
+            } catch (error) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'POST_FAIL',
+                    service: session_id,
+                    reason,
+                    payload: { archived: true, error: String(error) },
+                });
+                return errorResponse(error);
+            }
+        },
+    );
+
+    server.tool(
+        'jules_unarchive_session',
+        'Unarchive a previously archived Jules session, returning it to the active list.',
+        {
+            session_id: z.string().describe('Session ID or full resource name'),
+            reason: z
+                .string()
+                .describe(
+                    'Why this session is being unarchived (for audit log)',
+                ),
+        },
+        async ({ session_id, reason }) => {
+            try {
+                const session = await client.unarchiveSession(session_id);
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'POST',
+                    service: session.sourceContext.source,
+                    reason,
+                    target: session.id,
+                    payload: { archived: false },
+                });
+                return {
+                    content: [
+                        { type: 'text' as const, text: formatSession(session) },
+                    ],
+                };
+            } catch (error) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'POST_FAIL',
+                    service: session_id,
+                    reason,
+                    payload: { archived: false, error: String(error) },
+                });
+                return errorResponse(error);
+            }
+        },
+    );
+
+    server.tool(
+        'jules_delete_session',
+        'Permanently delete a Jules session. IRREVERSIBLE — prefer jules_archive_session unless you truly need to remove it. Requires confirm_destructive=true.',
+        {
+            session_id: z.string().describe('Session ID or full resource name'),
+            reason: z
+                .string()
+                .describe('Why this session is being deleted (for audit log)'),
+            confirm_destructive: z
+                .boolean()
+                .default(false)
+                .describe('Must be true to actually delete (safety guard)'),
+        },
+        async ({ session_id, reason, confirm_destructive }) => {
+            if (!confirm_destructive) {
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify({
+                                status: 'CONFIRMATION_REQUIRED',
+                                message:
+                                    'Deletion is irreversible. Re-call with confirm_destructive=true, or use jules_archive_session instead.',
+                            }),
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            try {
+                await client.deleteSession(session_id);
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DELETE',
+                    service: session_id,
+                    reason,
+                    target: session_id,
+                });
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify({
+                                status: 'OK',
+                                deleted: session_id,
+                            }),
+                        },
+                    ],
+                };
+            } catch (error) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DELETE_FAIL',
+                    service: session_id,
+                    reason,
+                    payload: { error: String(error) },
+                });
+                return errorResponse(error);
+            }
+        },
+    );
 }
