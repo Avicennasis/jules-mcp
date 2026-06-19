@@ -7,6 +7,10 @@ import {
   truncatePatch,
   stripBinaryHunks,
   formatSessionDiff,
+  summarizeChangeset,
+  formatSessionCompact,
+  changeSummaryLine,
+  summarizeSessionDiff,
 } from '../src/formatters.js';
 import type { Session, Activity, Plan } from '../src/types.js';
 
@@ -250,6 +254,158 @@ describe('formatSessionDiff', () => {
     ];
     const out = formatSessionDiff(session, activities);
     expect(out).toContain('Plan only');
+    expect(out.toLowerCase()).toContain('no code');
+  });
+});
+
+const multiFilePatch = [
+  'diff --git a/a.js b/a.js',
+  '--- a/a.js',
+  '+++ b/a.js',
+  '@@ -1,2 +1,3 @@',
+  ' context',
+  '+added one',
+  '+added two',
+  '-removed one',
+  'diff --git a/b.js b/b.js',
+  '--- a/b.js',
+  '+++ b/b.js',
+  '@@ -1 +1 @@',
+  '-old',
+  '+new',
+].join('\n');
+
+function changeActivities(patch: string, commit = 'do the thing'): Activity[] {
+  return [
+    {
+      name: 's/abc/activities/1', id: '1', createTime: 't', originator: 'agent',
+      sessionCompleted: {},
+      artifacts: [{ changeSet: { source: 'sources/github/o/r', gitPatch: { unidiffPatch: patch, baseCommitId: 'b', suggestedCommitMessage: commit } } }],
+    },
+  ];
+}
+
+describe('summarizeChangeset', () => {
+  it('counts changed files and per-file +/- lines, ignoring headers', () => {
+    const cs = summarizeChangeset(changeActivities(multiFilePatch));
+    expect(cs.hasChanges).toBe(true);
+    expect(cs.changedFiles).toBe(2);
+    // a.js: +added one, +added two, -removed one  → +2/-1
+    // b.js: +new, -old → +1/-1
+    expect(cs.insertions).toBe(3);
+    expect(cs.deletions).toBe(2);
+    expect(cs.files.find((f) => f.file === 'a.js')).toMatchObject({ insertions: 2, deletions: 1 });
+    expect(cs.files.find((f) => f.file === 'b.js')).toMatchObject({ insertions: 1, deletions: 1 });
+    expect(cs.commitMessage).toBe('do the thing');
+  });
+
+  it('uses the LAST cumulative changeset, not intermediates', () => {
+    const activities: Activity[] = [
+      {
+        name: 's/1', id: '1', createTime: 't', originator: 'agent',
+        artifacts: [{ changeSet: { source: 'src', gitPatch: { unidiffPatch: 'diff --git a/x.js b/x.js\n+partial', baseCommitId: 'b', suggestedCommitMessage: 'wip' } } }],
+      },
+      {
+        name: 's/2', id: '2', createTime: 't', originator: 'agent',
+        artifacts: [{ changeSet: { source: 'src', gitPatch: { unidiffPatch: 'diff --git a/x.js b/x.js\n+final\ndiff --git a/y.js b/y.js\n+more', baseCommitId: 'b', suggestedCommitMessage: 'final' } } }],
+      },
+    ];
+    const cs = summarizeChangeset(activities);
+    expect(cs.changedFiles).toBe(2);
+    expect(cs.commitMessage).toBe('final');
+  });
+
+  it('ignores binary blobs when counting', () => {
+    const patch = [
+      'diff --git a/foo.pyc b/foo.pyc',
+      'GIT binary patch',
+      'literal 27824',
+      'zcmdUYdsG`)nqLV',
+      '',
+      'diff --git a/real.js b/real.js',
+      '--- a/real.js',
+      '+++ b/real.js',
+      '@@ -1 +1 @@',
+      '+real',
+    ].join('\n');
+    const cs = summarizeChangeset(changeActivities(patch));
+    // both files appear, but the binary blob lines are not counted as +/-
+    expect(cs.changedFiles).toBe(2);
+    expect(cs.insertions).toBe(1);
+    expect(cs.deletions).toBe(0);
+  });
+
+  it('reports no changes for a plan-only session', () => {
+    const cs = summarizeChangeset([
+      { name: 's/1', id: '1', createTime: 't', originator: 'agent', planGenerated: { plan: { id: 'p', createTime: 't', steps: [] } } },
+    ]);
+    expect(cs.hasChanges).toBe(false);
+    expect(cs.changedFiles).toBe(0);
+  });
+});
+
+describe('changeSummaryLine', () => {
+  it('summarizes a changeset', () => {
+    const cs = summarizeChangeset(changeActivities(multiFilePatch));
+    expect(changeSummaryLine(cs)).toBe('Changes: 2 files, +3/-2');
+  });
+
+  it('says plan only when there are no changes', () => {
+    expect(changeSummaryLine({ hasChanges: false, changedFiles: 0, insertions: 0, deletions: 0, files: [] })).toBe('Changes: none (plan only)');
+  });
+});
+
+describe('formatSessionCompact', () => {
+  const session: Session = {
+    name: 'sessions/abc', id: 'abc', prompt: 'fix it', title: 'Fix the thing',
+    sourceContext: { source: 'sources/github/o/r' },
+    createTime: 't', updateTime: 't', state: 'COMPLETED', url: 'u',
+  };
+
+  it('is a single greppable line with state, id, trimmed source, and title', () => {
+    const line = formatSessionCompact(session);
+    expect(line).toBe('COMPLETED  abc  o/r  ::  Fix the thing');
+    expect(line.split('\n')).toHaveLength(1);
+  });
+
+  it('falls back to id when there is no title', () => {
+    const line = formatSessionCompact({ ...session, title: undefined });
+    expect(line).toContain('::  abc');
+  });
+
+  it('appends a file count when a change summary is supplied', () => {
+    const cs = summarizeChangeset(changeActivities(multiFilePatch));
+    expect(formatSessionCompact(session, cs)).toContain('(2 files)');
+  });
+
+  it('marks no changes when the summary is empty', () => {
+    expect(formatSessionCompact(session, { hasChanges: false, changedFiles: 0, insertions: 0, deletions: 0, files: [] })).toContain('(no changes)');
+  });
+});
+
+describe('summarizeSessionDiff', () => {
+  const session: Session = {
+    name: 'sessions/abc', id: 'abc', prompt: 'fix it', title: 'Fix the thing',
+    sourceContext: { source: 'sources/github/o/r' },
+    createTime: 't', updateTime: 't', state: 'COMPLETED', url: 'u',
+  };
+
+  it('lists files with +/- counts but not the raw hunks', () => {
+    const out = summarizeSessionDiff(session, changeActivities(multiFilePatch));
+    expect(out).toContain('Changes: 2 files, +3/-2');
+    expect(out).toContain('a.js  (+2/-1)');
+    expect(out).toContain('b.js  (+1/-1)');
+    expect(out).toContain('Commit: do the thing');
+    // no raw diff content
+    expect(out).not.toContain('@@');
+    expect(out).not.toContain('+added one');
+  });
+
+  it('notes plan-only sessions', () => {
+    const out = summarizeSessionDiff(session, [
+      { name: 's/1', id: '1', createTime: 't', originator: 'agent', planGenerated: { plan: { id: 'p', createTime: 't', steps: [{ id: 's1', title: 'only' }] } } },
+    ]);
+    expect(out).toContain('Plan: 1 step');
     expect(out.toLowerCase()).toContain('no code');
   });
 });

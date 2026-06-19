@@ -37,6 +37,7 @@ describe('session tools', () => {
       getSession: vi.fn().mockResolvedValue(mockSession),
       approvePlan: vi.fn().mockResolvedValue({ ...mockSession, state: 'IN_PROGRESS' }),
       sendMessage: vi.fn().mockResolvedValue({ ...mockSession, state: 'IN_PROGRESS' }),
+      listActivities: vi.fn().mockResolvedValue({ activities: [] }),
     };
 
     registerSessionTools(mockServer, mockClient as JulesClient);
@@ -97,5 +98,63 @@ describe('session tools', () => {
     const handler = registeredTools.get('jules_get_session')!.handler;
     const result = await handler({ session_id: 'abc' });
     expect(result.content[0].text).toContain('abc');
+  });
+
+  describe('jules_list_sessions options', () => {
+    const sessA: Session = { ...mockSession, id: 'a', sourceContext: { source: 'sources/github/o/bfr-shift-dashboard' } };
+    const sessB: Session = { ...mockSession, id: 'b', sourceContext: { source: 'sources/github/o/other-repo' } };
+    const sessC: Session = { ...mockSession, id: 'c', sourceContext: { source: 'sources/github/o/bfr-shift-dashboard' } };
+
+    it('filters by source across auto-followed pages', async () => {
+      (mockClient.listSessions as any)
+        .mockResolvedValueOnce({ sessions: [sessA, sessB], nextPageToken: 'p2' })
+        .mockResolvedValueOnce({ sessions: [sessC] });
+      const handler = registeredTools.get('jules_list_sessions')!.handler;
+      const result = await handler({ source: 'bfr-shift-dashboard' });
+      const meta = JSON.parse(result.content[0].text.split('\n\n')[0]);
+      // source set → default cap 10, so both pages are scanned, then filtered
+      expect(mockClient.listSessions).toHaveBeenCalledTimes(2);
+      expect(meta.count).toBe(2);
+      expect(meta.scanned).toBe(3);
+      expect(meta.filteredBy).toBe('bfr-shift-dashboard');
+      expect(result.content[0].text).toContain('ID: a');
+      expect(result.content[0].text).toContain('ID: c');
+      expect(result.content[0].text).not.toContain('other-repo');
+    });
+
+    it('compact mode emits one line per session and no prompt block', async () => {
+      (mockClient.listSessions as any).mockResolvedValue({ sessions: [sessA, sessB] });
+      const handler = registeredTools.get('jules_list_sessions')!.handler;
+      const result = await handler({ compact: true });
+      const body = result.content[0].text.split('\n\n').slice(1).join('\n\n').trim();
+      expect(body).toContain('o/bfr-shift-dashboard  ::');
+      expect(body).not.toContain('Prompt:');
+      expect(body.split('\n')).toHaveLength(2);
+    });
+
+    it('default call scans a single page and stays backward compatible', async () => {
+      (mockClient.listSessions as any).mockResolvedValue({ sessions: [sessA], nextPageToken: 'more' });
+      const handler = registeredTools.get('jules_list_sessions')!.handler;
+      const result = await handler({});
+      const meta = JSON.parse(result.content[0].text.split('\n\n')[0]);
+      expect(mockClient.listSessions).toHaveBeenCalledTimes(1);
+      expect(meta.pagesFetched).toBe(1);
+      expect(meta.nextPageToken).toBe('more');
+      expect(result.content[0].text).toContain('Prompt:');
+    });
+
+    it('detect_changes annotates each session via listActivities', async () => {
+      (mockClient.listSessions as any).mockResolvedValue({ sessions: [sessA] });
+      (mockClient.listActivities as any).mockResolvedValue({
+        activities: [{
+          name: 's/a/1', id: '1', createTime: 't', originator: 'agent', sessionCompleted: {},
+          artifacts: [{ changeSet: { source: 'src', gitPatch: { unidiffPatch: 'diff --git a/f.js b/f.js\n+x', baseCommitId: 'b', suggestedCommitMessage: 'm' } } }],
+        }],
+      });
+      const handler = registeredTools.get('jules_list_sessions')!.handler;
+      const result = await handler({ detect_changes: true, compact: true });
+      expect(mockClient.listActivities).toHaveBeenCalledWith('a', 200);
+      expect(result.content[0].text).toContain('(1 file)');
+    });
   });
 });
