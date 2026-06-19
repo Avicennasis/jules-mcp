@@ -45,7 +45,7 @@ Key states:
 - `IN_PROGRESS` — Jules is working, poll with `get_session`
 - `COMPLETED` — check `outputs[]` for PRs
 
-## MCP Tools (12 total)
+## MCP Tools (15 total)
 
 ### Sources (2 tools)
 
@@ -54,15 +54,18 @@ Key states:
 | `jules_list_sources` | `GET /sources`      | List connected GitHub repos. Returns name, repo details. |
 | `jules_get_source`   | `GET /sources/{id}` | Get details for a specific source.                       |
 
-### Sessions (5 tools)
+### Sessions (8 tools)
 
-| Tool                   | Jules API                         | Description                                                                                                                                                                                                                                               |
-| ---------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_create_session` | `POST /sessions`                  | Create a coding task. Params: `prompt` (required), `source` (required — source name), `starting_branch` (required), `title` (optional), `require_plan_approval` (optional, default **true**), `automation_mode` (optional — `AUTO_CREATE_PR` to auto-PR). |
-| `jules_list_sessions`  | `GET /sessions`                   | List sessions with pagination. Params: `page_size` (optional), `page_token` (optional).                                                                                                                                                                   |
-| `jules_get_session`    | `GET /sessions/{id}`              | Get session status, state, outputs. Use to poll progress or check for PR links.                                                                                                                                                                           |
-| `jules_approve_plan`   | `POST /sessions/{id}:approvePlan` | Approve a pending plan. Only valid when state is `AWAITING_PLAN_APPROVAL`.                                                                                                                                                                                |
-| `jules_send_message`   | `POST /sessions/{id}:sendMessage` | Send feedback/instructions to Jules. Used when state is `AWAITING_USER_FEEDBACK` or to provide additional context. Params: `message` (required).                                                                                                          |
+| Tool                      | Jules API                         | Description                                                                                                                                                                                                                                               |
+| ------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_create_session`    | `POST /sessions`                  | Create a coding task. Params: `prompt` (required), `source` (required — source name), `starting_branch` (required), `title` (optional), `require_plan_approval` (optional, default **true**), `automation_mode` (optional — `AUTO_CREATE_PR` to auto-PR). |
+| `jules_list_sessions`     | `GET /sessions`                   | List sessions with pagination. Params: `page_size` (optional), `page_token` (optional).                                                                                                                                                                   |
+| `jules_get_session`       | `GET /sessions/{id}`              | Get session status, state, outputs. Use to poll progress or check for PR links.                                                                                                                                                                           |
+| `jules_approve_plan`      | `POST /sessions/{id}:approvePlan` | Approve a pending plan. Only valid when state is `AWAITING_PLAN_APPROVAL`.                                                                                                                                                                                |
+| `jules_send_message`      | `POST /sessions/{id}:sendMessage` | Send feedback/instructions to Jules. Used when state is `AWAITING_USER_FEEDBACK` or to provide additional context. Params: `message` (required).                                                                                                          |
+| `jules_archive_session`   | `POST /sessions/{id}:archive`     | Archive (close out) a session and hide it from the active list. Reversible. Params: `reason` (required).                                                                                                                                                  |
+| `jules_unarchive_session` | `POST /sessions/{id}:unarchive`   | Restore a previously archived session. Params: `reason` (required).                                                                                                                                                                                       |
+| `jules_delete_session`    | `DELETE /sessions/{id}`           | Permanently delete a session (irreversible). Guarded by `confirm_destructive`. Params: `reason` (required), `confirm_destructive`.                                                                                                                        |
 
 ### Activities (2 tools)
 

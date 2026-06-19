@@ -149,6 +149,54 @@ describe('JulesClient', () => {
         });
     });
 
+    describe('archiveSession / unarchiveSession', () => {
+        function sessionResponse(archived: boolean) {
+            return jsonResponse({
+                name: 'sessions/abc',
+                id: 'abc',
+                state: 'COMPLETED',
+                prompt: 'x',
+                sourceContext: { source: 's' },
+                createTime: '',
+                updateTime: '',
+                url: '',
+                archived,
+            });
+        }
+
+        it('archiveSession POSTs to :archive and returns the session', async () => {
+            mockFetch.mockResolvedValueOnce(sessionResponse(true));
+            const session = await client.archiveSession('abc');
+            const [url, opts] = mockFetch.mock.calls[0];
+            expect(url).toContain('/sessions/abc:archive');
+            expect(opts.method).toBe('POST');
+            expect(session.archived).toBe(true);
+        });
+
+        it('unarchiveSession POSTs to :unarchive', async () => {
+            mockFetch.mockResolvedValueOnce(sessionResponse(false));
+            const session = await client.unarchiveSession('abc');
+            const [url, opts] = mockFetch.mock.calls[0];
+            expect(url).toContain('/sessions/abc:unarchive');
+            expect(opts.method).toBe('POST');
+            expect(session.archived).toBe(false);
+        });
+    });
+
+    describe('deleteSession', () => {
+        it('issues a DELETE and tolerates an empty body', async () => {
+            // 204 No Content with an empty body would break response.json();
+            // the client must not attempt to parse it.
+            mockFetch.mockResolvedValueOnce(
+                new Response(null, { status: 204 }),
+            );
+            await expect(client.deleteSession('abc')).resolves.toBeUndefined();
+            const [url, opts] = mockFetch.mock.calls[0];
+            expect(url).toContain('/sessions/abc');
+            expect(opts.method).toBe('DELETE');
+        });
+    });
+
     describe('error handling', () => {
         it('throws JulesAuthError on 401', async () => {
             mockFetch.mockResolvedValueOnce(

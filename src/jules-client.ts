@@ -32,7 +32,7 @@ export class JulesClient {
 
     private async request<T>(
         path: string,
-        method: 'GET' | 'POST' = 'GET',
+        method: 'GET' | 'POST' | 'DELETE' = 'GET',
         body?: unknown,
     ): Promise<T> {
         const url = `${BASE_URL}${path}`;
@@ -55,6 +55,11 @@ export class JulesClient {
 
         if (!response.ok) {
             await this.handleError(response, path);
+        }
+
+        // DELETE returns google.protobuf.Empty — the body may be `{}` or empty.
+        if (method === 'DELETE') {
+            return undefined as T;
         }
 
         return (await response.json()) as T;
@@ -148,6 +153,21 @@ export class JulesClient {
         return this.request<Session>(`/${name}:sendMessage`, 'POST', {
             prompt: message,
         });
+    }
+
+    async archiveSession(sessionId: string): Promise<Session> {
+        const name = normalizeResourceName(sessionId, 'sessions');
+        return this.request<Session>(`/${name}:archive`, 'POST', {});
+    }
+
+    async unarchiveSession(sessionId: string): Promise<Session> {
+        const name = normalizeResourceName(sessionId, 'sessions');
+        return this.request<Session>(`/${name}:unarchive`, 'POST', {});
+    }
+
+    async deleteSession(sessionId: string): Promise<void> {
+        const name = normalizeResourceName(sessionId, 'sessions');
+        await this.request<void>(`/${name}`, 'DELETE');
     }
 
     // --- Activities ---

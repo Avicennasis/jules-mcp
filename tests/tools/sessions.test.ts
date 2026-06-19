@@ -51,17 +51,27 @@ describe('session tools', () => {
                 .fn()
                 .mockResolvedValue({ ...mockSession, state: 'IN_PROGRESS' }),
             listActivities: vi.fn().mockResolvedValue({ activities: [] }),
+            archiveSession: vi
+                .fn()
+                .mockResolvedValue({ ...mockSession, archived: true }),
+            unarchiveSession: vi
+                .fn()
+                .mockResolvedValue({ ...mockSession, archived: false }),
+            deleteSession: vi.fn().mockResolvedValue(undefined),
         };
 
         registerSessionTools(mockServer, mockClient as JulesClient);
     });
 
-    it('registers all 5 session tools', () => {
+    it('registers all session tools', () => {
         expect(registeredTools.has('jules_create_session')).toBe(true);
         expect(registeredTools.has('jules_list_sessions')).toBe(true);
         expect(registeredTools.has('jules_get_session')).toBe(true);
         expect(registeredTools.has('jules_approve_plan')).toBe(true);
         expect(registeredTools.has('jules_send_message')).toBe(true);
+        expect(registeredTools.has('jules_archive_session')).toBe(true);
+        expect(registeredTools.has('jules_unarchive_session')).toBe(true);
+        expect(registeredTools.has('jules_delete_session')).toBe(true);
     });
 
     it('jules_create_session with dry_run returns DRY_RUN status', async () => {
@@ -220,6 +230,70 @@ describe('session tools', () => {
             });
             expect(mockClient.listActivities).toHaveBeenCalledWith('a', 200);
             expect(result.content[0].text).toContain('(1 file)');
+        });
+    });
+
+    describe('archive / unarchive / delete', () => {
+        it('jules_archive_session archives and emits an audit', async () => {
+            const { emitAudit } = await import('../../src/audit.js');
+            const handler = registeredTools.get(
+                'jules_archive_session',
+            )!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'reviewed and merged',
+            });
+            expect(mockClient.archiveSession).toHaveBeenCalledWith('abc');
+            expect(result.content[0].text).toContain('Archived: true');
+            expect(emitAudit).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    action: 'POST',
+                    target: 'abc',
+                    reason: 'reviewed and merged',
+                }),
+            );
+        });
+
+        it('jules_unarchive_session unarchives the session', async () => {
+            const handler = registeredTools.get(
+                'jules_unarchive_session',
+            )!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'reopening',
+            });
+            expect(mockClient.unarchiveSession).toHaveBeenCalledWith('abc');
+            // archived:false → no "Archived: true" line
+            expect(result.content[0].text).not.toContain('Archived: true');
+        });
+
+        it('jules_delete_session refuses without confirm_destructive', async () => {
+            const handler = registeredTools.get(
+                'jules_delete_session',
+            )!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'cleanup',
+            });
+            const parsed = JSON.parse(result.content[0].text);
+            expect(parsed.status).toBe('CONFIRMATION_REQUIRED');
+            expect(result.isError).toBe(true);
+            expect(mockClient.deleteSession).not.toHaveBeenCalled();
+        });
+
+        it('jules_delete_session deletes when confirmed', async () => {
+            const handler = registeredTools.get(
+                'jules_delete_session',
+            )!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'cleanup',
+                confirm_destructive: true,
+            });
+            const parsed = JSON.parse(result.content[0].text);
+            expect(parsed.status).toBe('OK');
+            expect(parsed.deleted).toBe('abc');
+            expect(mockClient.deleteSession).toHaveBeenCalledWith('abc');
         });
     });
 });

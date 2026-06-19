@@ -60,6 +60,8 @@ export interface Session {
     state: SessionState;
     url: string;
     outputs?: SessionOutput[];
+    /** Output only — whether the session has been archived. */
+    archived?: boolean;
 }
 
 export interface Source {

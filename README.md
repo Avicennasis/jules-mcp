@@ -13,10 +13,10 @@ Built on the **official** Jules REST API (`v1alpha`). No cookie scraping, no hea
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **13 tools** covering sources, sessions, activities, scheduling, a one-shot "run task", and a consolidated session-diff viewer.
+- **16 tools** covering sources, sessions, activities, scheduling, a one-shot "run task", and a consolidated session-diff viewer.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 64 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 89 unit tests, smoke test against the live API.
 
 ---
 
@@ -60,7 +60,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 64 unit tests
+npm test           # 89 unit tests
 ```
 
 ## Configuration
@@ -95,7 +95,7 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ## Tool reference
 
-13 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`.
+16 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
@@ -106,13 +106,16 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Sessions
 
-| Tool                       | Description                                                                                                               | Key params                                                                                                                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_create_session` ✎🔍 | Start a coding task.                                                                                                      | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?`                                             |
-| `jules_list_sessions`      | List sessions. Filter by repo, browse compactly, or annotate with change status.                                          | `page_size?`, `page_token?`, `source?` (filter by repo), `compact?` (one line each), `detect_changes?` (annotate file counts), `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set) |
-| `jules_get_session`        | Get one session's state, outputs, PR links.                                                                               | `session_id`                                                                                                                                                                                          |
-| `jules_approve_plan` ✎     | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason`                                                                                                                                                                                |
-| `jules_send_message` ✎     | Send feedback / a follow-up prompt to a session.                                                                          | `session_id`, `message`, `reason`                                                                                                                                                                     |
+| Tool                        | Description                                                                                                               | Key params                                                                                                                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_create_session` ✎🔍  | Start a coding task.                                                                                                      | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?`                                             |
+| `jules_list_sessions`       | List sessions. Filter by repo, browse compactly, or annotate with change status.                                          | `page_size?`, `page_token?`, `source?` (filter by repo), `compact?` (one line each), `detect_changes?` (annotate file counts), `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set) |
+| `jules_get_session`         | Get one session's state, outputs, PR links.                                                                               | `session_id`                                                                                                                                                                                          |
+| `jules_approve_plan` ✎      | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason`                                                                                                                                                                                |
+| `jules_send_message` ✎      | Send feedback / a follow-up prompt to a session.                                                                          | `session_id`, `message`, `reason`                                                                                                                                                                     |
+| `jules_archive_session` ✎   | Close out a session and hide it from the active list. Reversible.                                                         | `session_id`, `reason`                                                                                                                                                                                |
+| `jules_unarchive_session` ✎ | Restore a previously archived session to the active list.                                                                 | `session_id`, `reason`                                                                                                                                                                                |
+| `jules_delete_session` ✎🔥  | **Permanently** delete a session (irreversible). Guarded by `confirm_destructive`; prefer archiving.                      | `session_id`, `reason`, `confirm_destructive` (default false)                                                                                                                                         |
 
 ### Activities
 
@@ -189,7 +192,7 @@ These tripped us up while building against the live API; they're handled interna
 - **proto3 omits defaults.** `PlanStep.index` is absent when `0`; `description` is absent when empty. Don't assume they're present.
 - **`sendMessage` uses `prompt`, not `message`.** The request body field is `prompt` (same as session creation). Sending `message` returns `400 Unknown name "message"`.
 - **Diffs live in activity artifacts**, not `session.outputs`; cumulative changesets repeat across `progressUpdated` activities, so the last artifact-bearing activity holds the complete diff.
-- **There is no session close/archive/delete endpoint** in `v1alpha` — sessions are dismissed from the web UI only.
+- **Sessions can be archived, unarchived, and deleted** via `v1alpha` (`:archive`, `:unarchive`, and `DELETE`). Archiving is reversible and is the recommended way to close out finished work; `Session.archived` reflects the state. (Earlier `v1alpha` had no such endpoints — they were added later, so older notes claiming "web UI only" are out of date.)
 
 ## Project layout
 
