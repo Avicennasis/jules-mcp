@@ -175,14 +175,19 @@ export function formatSessionCompact(
     return line;
 }
 
-export function formatSession(session: Session): string {
+export function formatSession(
+    session: Session,
+    opts?: { includePrompt?: boolean },
+): string {
     const parts: string[] = [];
 
     parts.push(`Session: ${session.title ?? session.id}`);
     parts.push(`ID: ${session.id}`);
     parts.push(`State: ${session.state} — ${describeState(session.state)}`);
     if (session.archived) parts.push('Archived: true');
-    parts.push(`Prompt: ${session.prompt}`);
+    if (opts?.includePrompt !== false) {
+        parts.push(`Prompt: ${session.prompt}`);
+    }
     parts.push(`Source: ${session.sourceContext.source}`);
     parts.push(`URL: ${session.url}`);
     parts.push(`Created: ${session.createTime}`);

@@ -404,7 +404,12 @@ export function registerSessionTools(
                 });
                 return {
                     content: [
-                        { type: 'text' as const, text: formatSession(session) },
+                        {
+                            type: 'text' as const,
+                            text: formatSession(session, {
+                                includePrompt: false,
+                            }),
+                        },
                     ],
                 };
             } catch (error) {
@@ -446,7 +451,12 @@ export function registerSessionTools(
                 });
                 return {
                     content: [
-                        { type: 'text' as const, text: formatSession(session) },
+                        {
+                            type: 'text' as const,
+                            text: formatSession(session, {
+                                includePrompt: false,
+                            }),
+                        },
                     ],
                 };
             } catch (error) {
