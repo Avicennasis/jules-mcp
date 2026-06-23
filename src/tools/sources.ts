@@ -30,19 +30,62 @@ export function registerSourceTools(
     server.tool(
         'jules_list_sources',
         'List connected GitHub repositories available for Jules coding tasks',
-        {},
-        async () => {
+        {
+            page_size: z
+                .number()
+                .optional()
+                .describe('Number of sources to return per page'),
+            page_token: z
+                .string()
+                .optional()
+                .describe('Pagination token from a previous response'),
+            filter: z
+                .string()
+                .optional()
+                .describe(
+                    'AIP-160 filter expression (e.g. \'name=sources/source1 OR name=sources/source2\')',
+                ),
+            max_pages: z
+                .number()
+                .optional()
+                .describe(
+                    'Auto-follow pagination up to this many pages (default 10, max 20). Set to 1 for a single page.',
+                ),
+        },
+        async ({ page_size, page_token, filter, max_pages }) => {
             try {
-                const sources = await client.listSources();
+                const limit = Math.min(max_pages ?? 10, 20);
+                const allSources: unknown[] = [];
+                let token = page_token;
+                let pages = 0;
+
+                do {
+                    const result = await client.listSources({
+                        pageSize: page_size,
+                        pageToken: token,
+                        filter,
+                    });
+                    allSources.push(...result.sources);
+                    token = result.nextPageToken;
+                    pages++;
+                } while (token && pages < limit);
+
+                const response: Record<string, unknown> = {
+                    status: 'OK',
+                    count: allSources.length,
+                    pagesFetched: pages,
+                    sources: allSources,
+                };
+                if (token) {
+                    response.nextPageToken = token;
+                    response.note = `More sources available — pass this nextPageToken to continue.`;
+                }
+
                 return {
                     content: [
                         {
                             type: 'text' as const,
-                            text: JSON.stringify(
-                                { status: 'OK', sources },
-                                null,
-                                2,
-                            ),
+                            text: JSON.stringify(response, null, 2),
                         },
                     ],
                 };
