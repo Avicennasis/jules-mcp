@@ -366,6 +366,48 @@ export function formatSessionDiff(
 }
 
 /**
+ * Extract the final unified diff from a session's activities in a format
+ * suitable for `git apply`. Returns the raw patch text, the suggested commit
+ * message, and a file summary. Binary blobs are stripped. Returns null if the
+ * session produced no code changes.
+ */
+export interface PullResult {
+    patch: string;
+    commitMessage?: string;
+    files: FileChange[];
+}
+
+export function extractPatch(activities: Activity[]): PullResult | null {
+    const changeActivities = activities.filter((a) =>
+        a.artifacts?.some((art) => art.changeSet?.gitPatch),
+    );
+    const last = changeActivities[changeActivities.length - 1];
+    if (!last?.artifacts) return null;
+
+    const patches: string[] = [];
+    let commitMessage: string | undefined;
+
+    for (const art of last.artifacts) {
+        const gp = art.changeSet?.gitPatch;
+        if (!gp?.unidiffPatch) continue;
+        if (gp.suggestedCommitMessage && !commitMessage) {
+            commitMessage = gp.suggestedCommitMessage;
+        }
+        patches.push(stripBinaryHunks(gp.unidiffPatch));
+    }
+
+    if (patches.length === 0) return null;
+
+    const summary = summarizeChangeset(activities);
+
+    return {
+        patch: patches.join('\n'),
+        commitMessage,
+        files: summary.files,
+    };
+}
+
+/**
  * Compact, review-friendly summary of a session: header, plan size, and a
  * per-file +/- breakdown of the final changeset WITHOUT the raw diff hunks.
  * Use for large changesets or quick triage when the full
