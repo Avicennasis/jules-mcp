@@ -43,11 +43,9 @@ export class SourceConfigStore {
     private saveToDisk(): void {
         const dir = path.dirname(this.filePath);
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        fs.writeFileSync(
-            this.filePath,
-            JSON.stringify(this.configs, null, 2),
-            { mode: 0o600 },
-        );
+        fs.writeFileSync(this.filePath, JSON.stringify(this.configs, null, 2), {
+            mode: 0o600,
+        });
     }
 
     /** Get config for a specific source. Returns undefined if not set. */
@@ -56,7 +54,10 @@ export class SourceConfigStore {
     }
 
     /** Set (or merge) config for a source. */
-    set(sourceId: string, update: Partial<Omit<SourceConfig, 'updatedAt'>>): SourceConfig {
+    set(
+        sourceId: string,
+        update: Partial<Omit<SourceConfig, 'updatedAt'>>,
+    ): SourceConfig {
         const key = this.normalize(sourceId);
         const existing = this.configs[key] ?? { updatedAt: '' };
         const merged: SourceConfig = {

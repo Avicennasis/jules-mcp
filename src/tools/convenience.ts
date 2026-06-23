@@ -73,7 +73,7 @@ export function registerConvenienceTools(
                 .max(10)
                 .default(1)
                 .describe(
-                    'Number of parallel sessions to create with the same prompt (1-10, default 1). Each runs independently. Inspired by the Jules CLI\'s --parallel flag.',
+                    "Number of parallel sessions to create with the same prompt (1-10, default 1). Each runs independently. Inspired by the Jules CLI's --parallel flag.",
                 ),
         },
         async ({

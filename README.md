@@ -79,12 +79,12 @@ Keep the API key out of source control. Pull it from your shell environment, a `
 
 The server stores local data at `~/.local/share/jules-mcp/`:
 
-| File                   | Purpose                                                                    |
-| ---------------------- | -------------------------------------------------------------------------- |
-| `schedules.enc`        | Cron schedules (AES-256-GCM encrypted)                                    |
-| `.key`                 | Auto-generated encryption key (mode `0600`), only if no key is configured |
-| `source-config.json`   | Per-source metadata (suggestions enabled, notes) — plain JSON             |
-| `audit.jsonl`          | Audit log fallback when `inkwell-emit` is not on `PATH`                   |
+| File                 | Purpose                                                                   |
+| -------------------- | ------------------------------------------------------------------------- |
+| `schedules.enc`      | Cron schedules (AES-256-GCM encrypted)                                    |
+| `.key`               | Auto-generated encryption key (mode `0600`), only if no key is configured |
+| `source-config.json` | Per-source metadata (suggestions enabled, notes) — plain JSON             |
+| `audit.jsonl`        | Audit log fallback when `inkwell-emit` is not on `PATH`                   |
 
 ## Use it with Claude Code
 
@@ -111,12 +111,12 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Sources
 
-| Tool                        | Description                                                                                                          | Key params                                                                                                  |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `jules_list_sources`        | List connected GitHub repos. Supports auto-pagination and AIP-160 filtering. Annotates with local config if present. | `page_size?`, `page_token?`, `filter?` (AIP-160), `max_pages?` (default 10, max 20)                        |
-| `jules_get_source`          | Get details for one source. Annotates with local config if present.                                                  | `source`                                                                                                    |
-| `jules_configure_source` ✎  | Set local metadata the API doesn't expose (e.g. suggestions enabled). Stored on disk and annotated onto responses.   | `source`, `suggestions_enabled?`, `notes?`                                                                  |
-| `jules_list_source_configs` | List all locally-stored source configurations.                                                                       | —                                                                                                           |
+| Tool                        | Description                                                                                                          | Key params                                                                          |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `jules_list_sources`        | List connected GitHub repos. Supports auto-pagination and AIP-160 filtering. Annotates with local config if present. | `page_size?`, `page_token?`, `filter?` (AIP-160), `max_pages?` (default 10, max 20) |
+| `jules_get_source`          | Get details for one source. Annotates with local config if present.                                                  | `source`                                                                            |
+| `jules_configure_source` ✎  | Set local metadata the API doesn't expose (e.g. suggestions enabled). Stored on disk and annotated onto responses.   | `source`, `suggestions_enabled?`, `notes?`                                          |
+| `jules_list_source_configs` | List all locally-stored source configurations.                                                                       | —                                                                                   |
 
 ### Sessions
 
@@ -147,11 +147,11 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Convenience & review
 
-| Tool                     | Description                                                                                                                                                                                                                                                                           | Key params                                                                                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_run_task` ✎       | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag.                                                               | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10) |
-| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).                                                                   | `session_id`, `summary?`                                                                                                                                                                       |
-| `jules_pull_session`     | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                                                                               | `session_id`                                                                                                                                                                                   |
+| Tool                     | Description                                                                                                                                                                                                             | Key params                                                                                                                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` ✎       | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag. | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10) |
+| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).     | `session_id`, `summary?`                                                                                                                                                           |
+| `jules_pull_session`     | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                 | `session_id`                                                                                                                                                                       |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
 

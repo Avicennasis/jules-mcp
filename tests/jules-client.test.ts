@@ -38,7 +38,9 @@ describe('JulesClient', () => {
             );
 
             const result = await client.listSources();
-            expect(result.sources).toEqual([{ name: 'sources/github/owner/repo' }]);
+            expect(result.sources).toEqual([
+                { name: 'sources/github/owner/repo' },
+            ]);
             expect(mockFetch).toHaveBeenCalledWith(
                 'https://jules.googleapis.com/v1alpha/sources',
                 expect.objectContaining({

@@ -22,9 +22,9 @@ describe('source tools', () => {
             ),
         };
         mockClient = {
-            listSources: vi
-                .fn()
-                .mockResolvedValue({ sources: [{ name: 'sources/github/owner/repo' }] }),
+            listSources: vi.fn().mockResolvedValue({
+                sources: [{ name: 'sources/github/owner/repo' }],
+            }),
             getSource: vi.fn().mockResolvedValue({
                 name: 'sources/github/owner/repo',
             }),

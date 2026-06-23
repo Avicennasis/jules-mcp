@@ -65,7 +65,7 @@ export function registerDiffTools(
 
     server.tool(
         'jules_pull_session',
-        'Extract the final code changeset from a completed session as a git-apply-ready unified diff patch. Use this to apply Jules\'s changes to a local checkout. Returns the raw patch, suggested commit message, and a file summary.',
+        "Extract the final code changeset from a completed session as a git-apply-ready unified diff patch. Use this to apply Jules's changes to a local checkout. Returns the raw patch, suggested commit message, and a file summary.",
         {
             session_id: z.string().describe('Session ID or full resource name'),
         },

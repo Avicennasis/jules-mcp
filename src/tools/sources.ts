@@ -50,7 +50,7 @@ export function registerSourceTools(
                 .string()
                 .optional()
                 .describe(
-                    'AIP-160 filter expression (e.g. \'name=sources/source1 OR name=sources/source2\')',
+                    "AIP-160 filter expression (e.g. 'name=sources/source1 OR name=sources/source2')",
                 ),
             max_pages: z
                 .number()
@@ -168,9 +168,7 @@ export function registerSourceTools(
         {
             source: z
                 .string()
-                .describe(
-                    'Source name or ID (e.g. "github/owner/repo")',
-                ),
+                .describe('Source name or ID (e.g. "github/owner/repo")'),
             suggestions_enabled: z
                 .boolean()
                 .optional()
