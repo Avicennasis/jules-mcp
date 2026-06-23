@@ -113,7 +113,13 @@ export function registerSessionTools(
             }
 
             try {
-                const session = await client.createSession(body);
+                const created = await client.createSession(body);
+                // The create response often omits state/timestamps (proto3
+                // default-value omission). Fetch the full session so callers
+                // always see populated fields.
+                const session = created.state
+                    ? created
+                    : await client.getSession(created.name);
                 await emitAudit({
                     source: 'jules-mcp',
                     category: 'coding-task',

@@ -183,15 +183,16 @@ export function formatSession(
 
     parts.push(`Session: ${session.title ?? session.id}`);
     parts.push(`ID: ${session.id}`);
-    parts.push(`State: ${session.state} — ${describeState(session.state)}`);
+    const state = session.state ?? 'STATE_UNSPECIFIED';
+    parts.push(`State: ${state} — ${describeState(state)}`);
     if (session.archived) parts.push('Archived: true');
     if (opts?.includePrompt !== false) {
         parts.push(`Prompt: ${session.prompt}`);
     }
     parts.push(`Source: ${session.sourceContext.source}`);
     parts.push(`URL: ${session.url}`);
-    parts.push(`Created: ${session.createTime}`);
-    parts.push(`Updated: ${session.updateTime}`);
+    parts.push(`Created: ${session.createTime ?? '(pending)'}`);
+    parts.push(`Updated: ${session.updateTime ?? '(pending)'}`);
 
     if (session.outputs?.length) {
         for (const output of session.outputs) {
