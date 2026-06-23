@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { JulesClient } from './jules-client.js';
 import { ScheduleStore } from './scheduler/persistence.js';
 import { ScheduleManager } from './scheduler/cron.js';
+import { SourceConfigStore } from './source-config.js';
 import { registerSourceTools } from './tools/sources.js';
 import { registerSessionTools } from './tools/sessions.js';
 import { registerActivityTools } from './tools/activities.js';
@@ -30,9 +31,10 @@ const server = new McpServer({
 const client = new JulesClient(apiKey);
 const store = new ScheduleStore(encryptionKey);
 const manager = new ScheduleManager(store, client);
+const sourceConfig = new SourceConfigStore();
 
 // Register all tools
-registerSourceTools(server, client);
+registerSourceTools(server, client, sourceConfig);
 registerSessionTools(server, client);
 registerActivityTools(server, client);
 registerSchedulingTools(server, manager);

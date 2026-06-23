@@ -101,9 +101,25 @@ export class JulesClient {
 
     // --- Sources ---
 
-    async listSources(): Promise<Source[]> {
-        const result = await this.request<{ sources?: Source[] }>('/sources');
-        return result.sources ?? [];
+    async listSources(opts?: {
+        pageSize?: number;
+        pageToken?: string;
+        filter?: string;
+    }): Promise<{ sources: Source[]; nextPageToken?: string }> {
+        const params = new URLSearchParams();
+        if (opts?.pageSize) params.set('pageSize', String(opts.pageSize));
+        if (opts?.pageToken) params.set('pageToken', opts.pageToken);
+        if (opts?.filter) params.set('filter', opts.filter);
+        const query = params.toString();
+        const path = query ? `/sources?${query}` : '/sources';
+        const result = await this.request<{
+            sources?: Source[];
+            nextPageToken?: string;
+        }>(path);
+        return {
+            sources: result.sources ?? [],
+            nextPageToken: result.nextPageToken,
+        };
     }
 
     async getSource(name: string): Promise<Source> {

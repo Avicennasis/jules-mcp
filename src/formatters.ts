@@ -267,6 +267,17 @@ export function formatActivity(activity: Activity): string {
         parts.push(`[${time}] ${activity.description || 'Activity'}`);
     }
 
+    // The API's top-level `description` field can carry extra context even
+    // when a union member is present. Append it when it adds information
+    // beyond what the union member already provided.
+    if (
+        activity.description &&
+        !activity.agentMessaged &&
+        !activity.userMessaged
+    ) {
+        parts.push(`  Note: ${activity.description}`);
+    }
+
     if (activity.artifacts?.length) {
         parts.push(formatArtifacts(activity.artifacts));
     }
