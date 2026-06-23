@@ -7,14 +7,15 @@
 
 An [MCP](https://modelcontextprotocol.io) server that exposes [Google Jules](https://jules.google) — Google's asynchronous coding agent — as tools an MCP client (Claude Code, Claude Desktop, etc.) can call directly.
 
-Built on the **official** Jules REST API (`v1alpha`). No cookie scraping, no headless-browser automation, no reverse-engineered endpoints — just the documented API with an `X-Goog-Api-Key`.
+Built on the **official** Jules REST API (`v1alpha`) with CLI-inspired features from the [Jules Tools Reference](https://jules.google/docs/cli/reference/). No cookie scraping, no headless-browser automation, no reverse-engineered endpoints — just the documented API with an `X-Goog-Api-Key`.
 
 ```
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **16 tools** covering sources, sessions, activities, scheduling, a one-shot "run task", and a consolidated session-diff viewer.
+- **19 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a patch extractor, a consolidated diff viewer, and local source configuration.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
+- **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
 - **Typed & tested**: TypeScript, 89 unit tests, smoke test against the live API.
 
@@ -74,6 +75,17 @@ The server reads two environment variables:
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
+### Local data
+
+The server stores local data at `~/.local/share/jules-mcp/`:
+
+| File                   | Purpose                                                                    |
+| ---------------------- | -------------------------------------------------------------------------- |
+| `schedules.enc`        | Cron schedules (AES-256-GCM encrypted)                                    |
+| `.key`                 | Auto-generated encryption key (mode `0600`), only if no key is configured |
+| `source-config.json`   | Per-source metadata (suggestions enabled, notes) — plain JSON             |
+| `audit.jsonl`          | Audit log fallback when `inkwell-emit` is not on `PATH`                   |
+
 ## Use it with Claude Code
 
 Register it as an MCP server (e.g. in a project's `.claude/settings.json` or your plugin config):
@@ -95,14 +107,16 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ## Tool reference
 
-16 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
+19 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
-| Tool                 | Description                                     | Key params |
-| -------------------- | ----------------------------------------------- | ---------- |
-| `jules_list_sources` | List connected GitHub repos available to Jules. | —          |
-| `jules_get_source`   | Get details for one source.                     | `source`   |
+| Tool                        | Description                                                                                                          | Key params                                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `jules_list_sources`        | List connected GitHub repos. Supports auto-pagination and AIP-160 filtering. Annotates with local config if present. | `page_size?`, `page_token?`, `filter?` (AIP-160), `max_pages?` (default 10, max 20)                        |
+| `jules_get_source`          | Get details for one source. Annotates with local config if present.                                                  | `source`                                                                                                    |
+| `jules_configure_source` ✎  | Set local metadata the API doesn't expose (e.g. suggestions enabled). Stored on disk and annotated onto responses.   | `source`, `suggestions_enabled?`, `notes?`                                                                  |
+| `jules_list_source_configs` | List all locally-stored source configurations.                                                                       | —                                                                                                           |
 
 ### Sessions
 
@@ -133,10 +147,11 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Convenience & review
 
-| Tool                     | Description                                                                                                                                                                                                                      | Key params                                                                                                                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_run_task` ✎       | One-shot: create → poll until the plan is ready → auto-approve → poll to completion → return the result. Returns early if it needs your input (`AWAITING_USER_FEEDBACK`, or `AWAITING_PLAN_APPROVAL` when `auto_approve=false`). | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (default true), `poll_interval_ms?` (5000), `timeout_ms?` (600000) |
-| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).              | `session_id`, `summary?`                                                                                                                                          |
+| Tool                     | Description                                                                                                                                                                                                                                                                           | Key params                                                                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` ✎       | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag.                                                               | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10) |
+| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).                                                                   | `session_id`, `summary?`                                                                                                                                                                       |
+| `jules_pull_session`     | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                                                                               | `session_id`                                                                                                                                                                                   |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
 
@@ -202,14 +217,19 @@ src/
 ├── jules-client.ts       # typed HTTP client for the Jules API
 ├── types.ts              # types matching the Jules wire format
 ├── errors.ts             # structured error classes
-├── formatters.ts         # human-readable output (sessions, activities, diffs)
+├── formatters.ts         # human-readable output (sessions, activities, diffs, patches)
 ├── audit.ts              # inkwell-emit wrapper + JSONL fallback
+├── source-config.ts      # local per-source metadata store (suggestions, notes)
 ├── scheduler/
 │   ├── cron.ts           # node-cron manager
 │   └── persistence.ts    # AES-256-GCM encrypted schedule store
 └── tools/
-    ├── sources.ts        ├── sessions.ts     ├── activities.ts
-    ├── scheduling.ts     ├── convenience.ts  └── diff.ts
+    ├── sources.ts        # list, get, configure, list-configs
+    ├── sessions.ts       # create, list, get, approve, message, archive, delete
+    ├── activities.ts     # list, get
+    ├── scheduling.ts     # schedule_task, list_schedules
+    ├── convenience.ts    # run_task (with parallel mode)
+    └── diff.ts           # get_session_diff, pull_session
 scripts/
 ├── smoke-test.ts         # hits the live API (needs JULES_API_KEY)
 └── ...                   # review/utility scripts
@@ -220,7 +240,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (64 tests)
+npm test             # vitest run (89 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -245,9 +265,9 @@ Requests also carry a 30s timeout via `AbortSignal.timeout`.
 ## Roadmap
 
 - Remote streamable-HTTP deployment (Cloudflare Workers or similar)
-- Bulk session creation from a task list
 - npm publish
 - Source auto-selection when only one is connected
+- ~~Bulk session creation from a task list~~ — done via `parallel` param on `jules_run_task`
 
 ## License
 

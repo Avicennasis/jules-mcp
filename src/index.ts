@@ -25,7 +25,7 @@ const encryptionKey = process.env.JULES_ENCRYPTION_KEY;
 
 const server = new McpServer({
     name: 'jules-mcp',
-    version: '0.2.0',
+    version: '0.4.0',
 });
 
 const client = new JulesClient(apiKey);
