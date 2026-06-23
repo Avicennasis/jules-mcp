@@ -66,6 +66,15 @@ export function registerConvenienceTools(
                 .describe(
                     'Maximum wait time in milliseconds (default 10 minutes)',
                 ),
+            parallel: z
+                .number()
+                .int()
+                .min(1)
+                .max(10)
+                .default(1)
+                .describe(
+                    'Number of parallel sessions to create with the same prompt (1-10, default 1). Each runs independently. Inspired by the Jules CLI\'s --parallel flag.',
+                ),
         },
         async ({
             prompt,
@@ -77,8 +86,90 @@ export function registerConvenienceTools(
             auto_approve,
             poll_interval_ms,
             timeout_ms,
+            parallel,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
+
+            // --- Parallel mode: fan out N sessions, poll all concurrently ---
+            if (parallel > 1) {
+                try {
+                    const sessions = await Promise.all(
+                        Array.from({ length: parallel }, (_, i) =>
+                            client.createSession({
+                                prompt,
+                                sourceContext: {
+                                    source: normalizedSource,
+                                    githubRepoContext: {
+                                        startingBranch: starting_branch,
+                                    },
+                                },
+                                title: title
+                                    ? `${title} (${i + 1}/${parallel})`
+                                    : undefined,
+                                requirePlanApproval: !auto_approve,
+                                automationMode: automation_mode,
+                            }),
+                        ),
+                    );
+
+                    for (const s of sessions) {
+                        await emitAudit({
+                            source: 'jules-mcp',
+                            category: 'coding-task',
+                            action: 'POST',
+                            service: normalizedSource,
+                            reason,
+                            target: s.id,
+                            payload: {
+                                prompt,
+                                title,
+                                mode: 'run_task_parallel',
+                                parallel,
+                            },
+                        });
+                    }
+
+                    const results = sessions.map((s) => ({
+                        id: s.id,
+                        state: s.state,
+                        url: s.url,
+                        title: s.title,
+                    }));
+
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: JSON.stringify(
+                                    {
+                                        status: 'OK',
+                                        message: `Created ${parallel} parallel sessions. Poll each with jules_get_session or jules_get_session_diff.`,
+                                        sessions: results,
+                                    },
+                                    null,
+                                    2,
+                                ),
+                            },
+                        ],
+                    };
+                } catch (error) {
+                    await emitAudit({
+                        source: 'jules-mcp',
+                        category: 'coding-task',
+                        action: 'POST_FAIL',
+                        service: normalizedSource,
+                        reason,
+                        payload: {
+                            prompt,
+                            error: String(error),
+                            mode: 'run_task_parallel',
+                        },
+                    });
+                    return errorResponse(error);
+                }
+            }
+
+            // --- Single session mode (existing behavior) ---
             try {
                 // 1. Create session
                 const session = await client.createSession({
