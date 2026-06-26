@@ -495,6 +495,41 @@ describe('summarizeChangeset', () => {
         expect(cs.hasChanges).toBe(false);
         expect(cs.changedFiles).toBe(0);
     });
+
+    it('excludes lockfiles from counts by default', () => {
+        const patchWithLockfile = [
+            'diff --git a/src/app.ts b/src/app.ts',
+            '--- a/src/app.ts',
+            '+++ b/src/app.ts',
+            '+real code',
+            'diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml',
+            '--- /dev/null',
+            '+++ b/pnpm-lock.yaml',
+            ...Array.from({ length: 100 }, () => '+lockfile line'),
+        ].join('\n');
+        const cs = summarizeChangeset(changeActivities(patchWithLockfile));
+        expect(cs.changedFiles).toBe(1);
+        expect(cs.files).toHaveLength(1);
+        expect(cs.files[0].file).toBe('src/app.ts');
+        expect(cs.insertions).toBe(1);
+        // Lockfile lines should NOT be counted
+        expect(cs.deletions).toBe(0);
+    });
+
+    it('includes lockfiles when opted in', () => {
+        const patchWithLockfile = [
+            'diff --git a/src/app.ts b/src/app.ts',
+            '+real code',
+            'diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml',
+            '+lockfile line',
+        ].join('\n');
+        const cs = summarizeChangeset(changeActivities(patchWithLockfile), {
+            includeLockfiles: true,
+        });
+        expect(cs.changedFiles).toBe(2);
+        expect(cs.files).toHaveLength(2);
+        expect(cs.insertions).toBe(2);
+    });
 });
 
 describe('changeSummaryLine', () => {

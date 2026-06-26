@@ -74,7 +74,10 @@ export interface ChangeSummary {
  * diff. Binary blobs are ignored. Use this for triage and the `hasChanges`
  * signal in listings, where the raw diff would be too large.
  */
-export function summarizeChangeset(activities: Activity[]): ChangeSummary {
+export function summarizeChangeset(
+    activities: Activity[],
+    opts?: { includeLockfiles?: boolean },
+): ChangeSummary {
     const empty: ChangeSummary = {
         hasChanges: false,
         changedFiles: 0,
@@ -94,6 +97,7 @@ export function summarizeChangeset(activities: Activity[]): ChangeSummary {
     let commitMessage: string | undefined;
     let insertions = 0;
     let deletions = 0;
+    let skippingLockfile = false;
 
     for (const art of last.artifacts) {
         const gp = art.changeSet?.gitPatch;
@@ -105,15 +109,23 @@ export function summarizeChangeset(activities: Activity[]): ChangeSummary {
         for (const line of (gp.unidiffPatch ?? '').split('\n')) {
             if (line.startsWith('diff --git ')) {
                 const match = line.match(/ b\/(.+)$/);
+                const filePath = match
+                    ? match[1]
+                    : line.replace('diff --git ', '');
+                skippingLockfile =
+                    !opts?.includeLockfiles && isLockfile(filePath);
                 current = {
-                    file: match ? match[1] : line.replace('diff --git ', ''),
+                    file: filePath,
                     insertions: 0,
                     deletions: 0,
                 };
-                files.push(current);
+                if (!skippingLockfile) {
+                    files.push(current);
+                }
                 inBinary = false;
                 continue;
             }
+            if (skippingLockfile) continue;
             if (line.startsWith('GIT binary patch')) {
                 inBinary = true;
                 continue;
@@ -503,7 +515,9 @@ export function extractPatch(
 
     if (patches.length === 0) return null;
 
-    const summary = summarizeChangeset(activities);
+    const summary = summarizeChangeset(activities, {
+        includeLockfiles: opts?.includeLockfiles,
+    });
     // Filter out excluded lockfiles from the file summary too
     const files = opts?.includeLockfiles
         ? summary.files
@@ -539,7 +553,7 @@ export function summarizeSessionDiff(
         parts.push(`Plan: ${stepCount} step${stepCount === 1 ? '' : 's'}`);
     }
 
-    const change = summarizeChangeset(activities);
+    const change = summarizeChangeset(activities, { includeLockfiles: false });
     parts.push('');
     if (!change.hasChanges) {
         parts.push('(No code changes — session produced a plan only.)');
