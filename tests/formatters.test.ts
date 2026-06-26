@@ -6,11 +6,15 @@ import {
     describeState,
     truncatePatch,
     stripBinaryHunks,
+    stripLockfileDiffs,
+    LOCKFILE_PATTERNS,
+    DIFF_AUTO_SUMMARY_THRESHOLD,
     formatSessionDiff,
     summarizeChangeset,
     formatSessionCompact,
     changeSummaryLine,
     summarizeSessionDiff,
+    extractPatch,
 } from '../src/formatters.js';
 import type { Session, Activity, Plan } from '../src/types.js';
 
@@ -599,5 +603,203 @@ describe('summarizeSessionDiff', () => {
         ]);
         expect(out).toContain('Plan: 1 step');
         expect(out.toLowerCase()).toContain('no code');
+    });
+});
+
+describe('stripLockfileDiffs', () => {
+    it('strips known lockfile diffs and lists excluded files', () => {
+        const diff = [
+            'diff --git a/src/app.ts b/src/app.ts',
+            '--- a/src/app.ts',
+            '+++ b/src/app.ts',
+            '+real code change',
+            'diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml',
+            'new file mode 100644',
+            '--- /dev/null',
+            '+++ b/pnpm-lock.yaml',
+            '+lockVersion: 9.0',
+            '+dependencies:',
+            '+  react: 19.0.0',
+            'diff --git a/src/util.ts b/src/util.ts',
+            '+another real change',
+        ].join('\n');
+        const { filtered, excluded } = stripLockfileDiffs(diff);
+        expect(excluded).toEqual(['pnpm-lock.yaml']);
+        expect(filtered).toContain('+real code change');
+        expect(filtered).toContain('+another real change');
+        expect(filtered).not.toContain('+lockVersion');
+        expect(filtered).not.toContain('+dependencies');
+        expect(filtered).toContain('lockfile pnpm-lock.yaml');
+    });
+
+    it('handles package-lock.json in subdirectories', () => {
+        const diff = [
+            'diff --git a/api/package-lock.json b/api/package-lock.json',
+            '--- a/api/package-lock.json',
+            '+++ b/api/package-lock.json',
+            '+massive lockfile content',
+        ].join('\n');
+        const { filtered, excluded } = stripLockfileDiffs(diff);
+        expect(excluded).toEqual(['api/package-lock.json']);
+        expect(filtered).not.toContain('+massive');
+    });
+
+    it('passes through non-lockfile diffs unchanged', () => {
+        const diff = [
+            'diff --git a/src/main.ts b/src/main.ts',
+            '+code',
+        ].join('\n');
+        const { filtered, excluded } = stripLockfileDiffs(diff);
+        expect(excluded).toEqual([]);
+        expect(filtered).toBe(diff);
+    });
+
+    it('recognizes all known lockfile patterns', () => {
+        for (const lock of LOCKFILE_PATTERNS) {
+            const diff = `diff --git a/${lock} b/${lock}\n+content`;
+            const { excluded } = stripLockfileDiffs(diff);
+            expect(excluded).toContain(lock);
+        }
+    });
+});
+
+describe('extractPatch lockfile filtering', () => {
+    const lockfilePatch = [
+        'diff --git a/src/app.ts b/src/app.ts',
+        '--- a/src/app.ts',
+        '+++ b/src/app.ts',
+        '+real code',
+        'diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml',
+        '--- /dev/null',
+        '+++ b/pnpm-lock.yaml',
+        '+lockfile bulk',
+    ].join('\n');
+
+    const activities: Activity[] = [
+        {
+            name: 's/1',
+            id: '1',
+            createTime: 't',
+            originator: 'agent',
+            artifacts: [
+                {
+                    changeSet: {
+                        source: 'sources/github/o/r',
+                        gitPatch: {
+                            unidiffPatch: lockfilePatch,
+                            baseCommitId: 'b',
+                            suggestedCommitMessage: 'fix it',
+                        },
+                    },
+                },
+            ],
+        },
+    ];
+
+    it('excludes lockfiles by default', () => {
+        const result = extractPatch(activities);
+        expect(result).not.toBeNull();
+        expect(result!.patch).not.toContain('+lockfile bulk');
+        expect(result!.patch).toContain('+real code');
+        expect(result!.excludedLockfiles).toEqual(['pnpm-lock.yaml']);
+        expect(result!.files.some((f) => f.file === 'pnpm-lock.yaml')).toBe(
+            false,
+        );
+    });
+
+    it('includes lockfiles when opted in', () => {
+        const result = extractPatch(activities, { includeLockfiles: true });
+        expect(result).not.toBeNull();
+        expect(result!.patch).toContain('+lockfile bulk');
+        expect(result!.excludedLockfiles).toBeUndefined();
+    });
+});
+
+describe('formatSessionDiff lockfile filtering', () => {
+    const session: Session = {
+        name: 'sessions/abc',
+        id: 'abc',
+        prompt: 'fix it',
+        title: 'Fix it',
+        sourceContext: { source: 'sources/github/o/r' },
+        createTime: 't',
+        updateTime: 't',
+        state: 'COMPLETED',
+        url: 'u',
+    };
+
+    const lockfilePatch = [
+        'diff --git a/src/app.ts b/src/app.ts',
+        '+real code',
+        'diff --git a/yarn.lock b/yarn.lock',
+        '+huge lockfile',
+    ].join('\n');
+
+    const activities: Activity[] = [
+        {
+            name: 's/abc/activities/1',
+            id: '1',
+            createTime: 't',
+            originator: 'agent',
+            artifacts: [
+                {
+                    changeSet: {
+                        source: 'sources/github/o/r',
+                        gitPatch: {
+                            unidiffPatch: lockfilePatch,
+                            baseCommitId: 'b',
+                            suggestedCommitMessage: 'commit',
+                        },
+                    },
+                },
+            ],
+        },
+    ];
+
+    it('strips lockfiles by default and adds note', () => {
+        const out = formatSessionDiff(session, activities);
+        expect(out).toContain('+real code');
+        expect(out).not.toContain('+huge lockfile');
+        expect(out).toContain('1 lockfile diff omitted');
+        expect(out).toContain('yarn.lock');
+    });
+
+    it('includes lockfiles when opted in', () => {
+        const out = formatSessionDiff(session, activities, {
+            includeLockfiles: true,
+        });
+        expect(out).toContain('+huge lockfile');
+        expect(out).not.toContain('omitted');
+    });
+
+    it('auto-falls back to summary when diff exceeds threshold', () => {
+        const hugePatch =
+            'diff --git a/big.ts b/big.ts\n' +
+            '+x\n'.repeat(DIFF_AUTO_SUMMARY_THRESHOLD);
+        const bigActivities: Activity[] = [
+            {
+                name: 's/abc/activities/1',
+                id: '1',
+                createTime: 't',
+                originator: 'agent',
+                artifacts: [
+                    {
+                        changeSet: {
+                            source: 'sources/github/o/r',
+                            gitPatch: {
+                                unidiffPatch: hugePatch,
+                                baseCommitId: 'b',
+                                suggestedCommitMessage: 'big commit',
+                            },
+                        },
+                    },
+                ],
+            },
+        ];
+        const out = formatSessionDiff(session, bigActivities);
+        expect(out).toContain('auto-summarized');
+        expect(out).toContain('big.ts');
+        // Should NOT contain the raw diff lines
+        expect(out.split('\n').length).toBeLessThan(50);
     });
 });

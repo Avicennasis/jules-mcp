@@ -43,8 +43,14 @@ export function registerDiffTools(
                 .describe(
                     'Return a compact summary (files changed, +/- line counts, commit message) instead of the full diff. Use for large changesets or quick triage.',
                 ),
+            include_lockfiles: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Include lockfile diffs (pnpm-lock.yaml, package-lock.json, yarn.lock, etc.) in the output. Default false — lockfiles are excluded to keep output readable.',
+                ),
         },
-        async ({ session_id, summary }) => {
+        async ({ session_id, summary, include_lockfiles }) => {
             try {
                 const session = await client.getSession(session_id);
                 const { activities } = await client.listActivities(
@@ -53,7 +59,9 @@ export function registerDiffTools(
                 );
                 const text = summary
                     ? summarizeSessionDiff(session, activities)
-                    : formatSessionDiff(session, activities);
+                    : formatSessionDiff(session, activities, {
+                          includeLockfiles: include_lockfiles,
+                      });
                 return {
                     content: [{ type: 'text' as const, text }],
                 };
@@ -68,15 +76,23 @@ export function registerDiffTools(
         "Extract the final code changeset from a completed session as a git-apply-ready unified diff patch. Use this to apply Jules's changes to a local checkout. Returns the raw patch, suggested commit message, and a file summary.",
         {
             session_id: z.string().describe('Session ID or full resource name'),
+            include_lockfiles: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Include lockfile diffs in the patch output. Default false — lockfiles are excluded to keep output manageable.',
+                ),
         },
-        async ({ session_id }) => {
+        async ({ session_id, include_lockfiles }) => {
             try {
                 const session = await client.getSession(session_id);
                 const { activities } = await client.listActivities(
                     session_id,
                     200,
                 );
-                const result = extractPatch(activities);
+                const result = extractPatch(activities, {
+                    includeLockfiles: include_lockfiles,
+                });
 
                 if (!result) {
                     return {
@@ -103,7 +119,7 @@ export function registerDiffTools(
                     )
                     .join('\n');
 
-                const header = [
+                const headerParts = [
                     `Session: ${session.title ?? session.id}`,
                     `State: ${session.state}`,
                     `Source: ${session.sourceContext.source}`,
@@ -112,10 +128,25 @@ export function registerDiffTools(
                         : null,
                     `Files (${result.files.length}):`,
                     filesSummary,
+                ];
+
+                if (result.excludedLockfiles?.length) {
+                    headerParts.push('');
+                    headerParts.push(
+                        `Lockfiles excluded (${result.excludedLockfiles.length}): ${result.excludedLockfiles.join(', ')}`,
+                    );
+                    headerParts.push(
+                        'Use include_lockfiles=true to include them.',
+                    );
+                }
+
+                headerParts.push(
                     '',
                     '--- patch (pipe to `git apply` or `git apply --3way`) ---',
                     '',
-                ]
+                );
+
+                const header = headerParts
                     .filter((l) => l !== null)
                     .join('\n');
 

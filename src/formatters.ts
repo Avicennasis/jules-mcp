@@ -287,6 +287,70 @@ export function formatActivity(activity: Activity): string {
 }
 
 /**
+ * Filenames treated as generated/lockfile artifacts that are excluded from
+ * diff output by default — they bloat context without adding review value.
+ */
+export const LOCKFILE_PATTERNS: ReadonlyArray<string> = [
+    'pnpm-lock.yaml',
+    'package-lock.json',
+    'yarn.lock',
+    'Gemfile.lock',
+    'Cargo.lock',
+    'poetry.lock',
+    'composer.lock',
+    'go.sum',
+];
+
+function isLockfile(filePath: string): boolean {
+    const basename = filePath.split('/').pop() ?? filePath;
+    return LOCKFILE_PATTERNS.includes(basename);
+}
+
+export interface FilteredDiff {
+    filtered: string;
+    excluded: string[];
+}
+
+/**
+ * Strip lockfile/generated-file diffs from a unified diff, replacing each
+ * with a one-line summary. Returns the filtered patch and the list of
+ * excluded file paths.
+ */
+export function stripLockfileDiffs(diff: string): FilteredDiff {
+    const lines = diff.split('\n');
+    const out: string[] = [];
+    const excluded: string[] = [];
+    let skipping = false;
+    let currentFile = '';
+
+    for (const line of lines) {
+        if (line.startsWith('diff --git ')) {
+            const match = line.match(/ b\/(.+)$/);
+            currentFile = match ? match[1] : '';
+            if (isLockfile(currentFile)) {
+                skipping = true;
+                excluded.push(currentFile);
+                out.push(
+                    `diff --git a/${currentFile} b/${currentFile}`,
+                );
+                out.push(
+                    `  [lockfile ${currentFile} — diff omitted (${LOCKFILE_PATTERNS.length} known patterns filtered)]`,
+                );
+                continue;
+            }
+            skipping = false;
+            out.push(line);
+            continue;
+        }
+        if (!skipping) {
+            out.push(line);
+        }
+    }
+
+    return { filtered: out.join('\n'), excluded };
+}
+
+/**
  * Replace GIT binary patch blobs (e.g. compiled .pyc files) with a one-line
  * summary per file, so a consolidated diff stays readable. Text hunks are
  * preserved verbatim.
@@ -325,9 +389,13 @@ export function stripBinaryHunks(diff: string): string {
  * complete final diff — earlier ones are subsets and are skipped to avoid
  * duplication.
  */
+/** Maximum character count before `formatSessionDiff` auto-falls back to summary mode. */
+export const DIFF_AUTO_SUMMARY_THRESHOLD = 50_000;
+
 export function formatSessionDiff(
     session: Session,
     activities: Activity[],
+    opts?: { includeLockfiles?: boolean },
 ): string {
     const parts: string[] = [];
     parts.push(`Session: ${session.title ?? session.id}`);
@@ -349,21 +417,46 @@ export function formatSessionDiff(
     if (last?.artifacts) {
         parts.push('');
         parts.push('Changes:');
+        const excludedFiles: string[] = [];
         for (const art of last.artifacts) {
             if (art.changeSet?.gitPatch) {
                 const p = art.changeSet.gitPatch;
                 if (p.suggestedCommitMessage) {
                     parts.push(`Commit: ${p.suggestedCommitMessage}`);
                 }
-                parts.push(stripBinaryHunks(p.unidiffPatch ?? ''));
+                let diff = stripBinaryHunks(p.unidiffPatch ?? '');
+                if (!opts?.includeLockfiles) {
+                    const { filtered, excluded } = stripLockfileDiffs(diff);
+                    diff = filtered;
+                    excludedFiles.push(...excluded);
+                }
+                parts.push(diff);
             }
+        }
+        if (excludedFiles.length > 0) {
+            parts.push('');
+            parts.push(
+                `Note: ${excludedFiles.length} lockfile diff${excludedFiles.length === 1 ? '' : 's'} omitted: ${excludedFiles.join(', ')}`,
+            );
         }
     } else {
         parts.push('');
         parts.push('(No code changes — session produced a plan only.)');
     }
 
-    return parts.join('\n');
+    const result = parts.join('\n');
+
+    // Auto-fallback: if the full diff still exceeds the threshold after
+    // lockfile stripping, return the compact summary instead.
+    if (result.length > DIFF_AUTO_SUMMARY_THRESHOLD) {
+        const summary = summarizeSessionDiff(session, activities);
+        return (
+            summary +
+            `\n\n(Full diff was ${result.length.toLocaleString()} chars — auto-summarized. Use summary=false with include_lockfiles=true to force full output.)`
+        );
+    }
+
+    return result;
 }
 
 /**
@@ -376,9 +469,13 @@ export interface PullResult {
     patch: string;
     commitMessage?: string;
     files: FileChange[];
+    excludedLockfiles?: string[];
 }
 
-export function extractPatch(activities: Activity[]): PullResult | null {
+export function extractPatch(
+    activities: Activity[],
+    opts?: { includeLockfiles?: boolean },
+): PullResult | null {
     const changeActivities = activities.filter((a) =>
         a.artifacts?.some((art) => art.changeSet?.gitPatch),
     );
@@ -387,6 +484,7 @@ export function extractPatch(activities: Activity[]): PullResult | null {
 
     const patches: string[] = [];
     let commitMessage: string | undefined;
+    const excludedFiles: string[] = [];
 
     for (const art of last.artifacts) {
         const gp = art.changeSet?.gitPatch;
@@ -394,17 +492,28 @@ export function extractPatch(activities: Activity[]): PullResult | null {
         if (gp.suggestedCommitMessage && !commitMessage) {
             commitMessage = gp.suggestedCommitMessage;
         }
-        patches.push(stripBinaryHunks(gp.unidiffPatch));
+        let cleaned = stripBinaryHunks(gp.unidiffPatch);
+        if (!opts?.includeLockfiles) {
+            const { filtered, excluded } = stripLockfileDiffs(cleaned);
+            cleaned = filtered;
+            excludedFiles.push(...excluded);
+        }
+        patches.push(cleaned);
     }
 
     if (patches.length === 0) return null;
 
     const summary = summarizeChangeset(activities);
+    // Filter out excluded lockfiles from the file summary too
+    const files = opts?.includeLockfiles
+        ? summary.files
+        : summary.files.filter((f) => !excludedFiles.includes(f.file));
 
     return {
         patch: patches.join('\n'),
         commitMessage,
-        files: summary.files,
+        files,
+        excludedLockfiles: excludedFiles.length > 0 ? excludedFiles : undefined,
     };
 }
 
