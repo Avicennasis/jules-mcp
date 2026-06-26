@@ -58,8 +58,14 @@ export function registerSourceTools(
                 .describe(
                     'Auto-follow pagination up to this many pages (default 10, max 20). Set to 1 for a single page.',
                 ),
+            suggestions_only: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Filter to only repos with suggestions enabled (tracked in local config). Useful for checking the suggestions quota (5 repos max).',
+                ),
         },
-        async ({ page_size, page_token, filter, max_pages }) => {
+        async ({ page_size, page_token, filter, max_pages, suggestions_only }) => {
             try {
                 const limit = Math.min(max_pages ?? 10, 20);
                 const allSources: Record<string, unknown>[] = [];
@@ -90,12 +96,26 @@ export function registerSourceTools(
                     }
                 }
 
+                // Filter to suggestions-enabled repos if requested
+                let filtered = allSources;
+                if (suggestions_only && configStore) {
+                    filtered = allSources.filter((s) => {
+                        const cfg = s.localConfig as
+                            | { suggestionsEnabled?: boolean }
+                            | undefined;
+                        return cfg?.suggestionsEnabled === true;
+                    });
+                }
+
                 const response: Record<string, unknown> = {
                     status: 'OK',
-                    count: allSources.length,
+                    count: filtered.length,
                     pagesFetched: pages,
-                    sources: allSources,
+                    sources: filtered,
                 };
+                if (suggestions_only) {
+                    response.suggestionsQuota = `${filtered.length}/5 slots used`;
+                }
                 if (token) {
                     response.nextPageToken = token;
                     response.note = `More sources available — pass this nextPageToken to continue.`;
@@ -235,6 +255,9 @@ export function registerSourceTools(
 
             try {
                 const configs = configStore.list();
+                const suggestionsEnabled = configs.filter(
+                    (c) => c.config.suggestionsEnabled === true,
+                );
                 return {
                     content: [
                         {
@@ -243,6 +266,11 @@ export function registerSourceTools(
                                 {
                                     status: 'OK',
                                     count: configs.length,
+                                    suggestionsQuota: `${suggestionsEnabled.length}/5 slots used`,
+                                    suggestionsRepos:
+                                        suggestionsEnabled.map(
+                                            (c) => c.sourceId,
+                                        ),
                                     configs,
                                 },
                                 null,
