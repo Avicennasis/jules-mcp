@@ -5,6 +5,10 @@ import {
     formatSessionDiff,
     summarizeSessionDiff,
     extractPatch,
+    suggestBranchName,
+    extractReviewContext,
+    detectTestFrameworkConflicts,
+    extractQualitySignals,
 } from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
 
@@ -57,11 +61,30 @@ export function registerDiffTools(
                     session_id,
                     200,
                 );
-                const text = summary
+                let text = summary
                     ? summarizeSessionDiff(session, activities)
                     : formatSessionDiff(session, activities, {
                           includeLockfiles: include_lockfiles,
                       });
+
+                // Scan for review warnings and quality signals
+                const { rawDiff, proseTexts } = extractReviewContext(
+                    session,
+                    activities,
+                );
+                const warnings = detectTestFrameworkConflicts(rawDiff);
+                const signals = extractQualitySignals(proseTexts);
+                if (warnings.length > 0 || signals.length > 0) {
+                    const items: string[] = [];
+                    for (const w of warnings) {
+                        items.push(`- [${w.type}] ${w.message}`);
+                    }
+                    for (const s of signals) {
+                        items.push(`- [${s.type}] ${s.excerpt}`);
+                    }
+                    text += `\n\n⚠️ Review warnings:\n${items.join('\n')}`;
+                }
+
                 return {
                     content: [{ type: 'text' as const, text }],
                 };
@@ -123,6 +146,7 @@ export function registerDiffTools(
                     `Session: ${session.title ?? session.id}`,
                     `State: ${session.state}`,
                     `Source: ${session.sourceContext.source}`,
+                    `Suggested branch: ${suggestBranchName(session)}`,
                     result.commitMessage
                         ? `Commit message: ${result.commitMessage}`
                         : null,

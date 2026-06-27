@@ -298,6 +298,342 @@ export function formatActivity(activity: Activity): string {
     return parts.join('\n');
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Branch name helpers (#47587)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Strip trailing numeric session IDs from Jules branch names.
+ * "fix-unsafe-redirect-forgot-password-9689301077527532144" → "fix-unsafe-redirect-forgot-password"
+ * Leaves names without a trailing ID unchanged.
+ */
+export function stripSessionId(branchName: string): string {
+    return branchName.replace(/-\d{10,}$/, '');
+}
+
+/**
+ * Derive a clean, slug-style branch name from a session's title — free of
+ * session IDs or other Jules-specific artifacts.
+ */
+export function suggestBranchName(session: Session): string {
+    const title = session.title ?? session.id;
+    const slug = title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60);
+    return slug || `session-${session.id}`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Test-framework conflict detection (#47589)
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Known test framework package names for conflict detection. */
+const TEST_FRAMEWORKS = [
+    'jest',
+    'vitest',
+    'mocha',
+    'jasmine',
+    'ava',
+    'tap',
+    'uvu',
+    'ts-jest',
+    '@types/jest',
+    '@jest/globals',
+    '@vitest/coverage-v8',
+    '@vitest/ui',
+] as const;
+
+/** Mutually exclusive test framework families. */
+const FRAMEWORK_FAMILIES: Record<string, string> = {
+    jest: 'jest',
+    'ts-jest': 'jest',
+    '@types/jest': 'jest',
+    '@jest/globals': 'jest',
+    vitest: 'vitest',
+    '@vitest/coverage-v8': 'vitest',
+    '@vitest/ui': 'vitest',
+    mocha: 'mocha',
+    jasmine: 'jasmine',
+    ava: 'ava',
+    tap: 'tap',
+    uvu: 'uvu',
+};
+
+export interface DiffWarning {
+    type: string;
+    message: string;
+}
+
+/**
+ * Scan a unified diff for potential test framework conflicts in package.json.
+ * Looks for added (+) lines containing test framework deps and checks if
+ * the existing (-/context) lines contain a different framework family.
+ */
+export function detectTestFrameworkConflicts(diff: string): DiffWarning[] {
+    const warnings: DiffWarning[] = [];
+    const pkgPattern = /diff --git a\/[^\s]*package\.json/;
+    const lines = diff.split('\n');
+    let inPkgJson = false;
+    const addedDeps = new Set<string>();
+    const existingDeps = new Set<string>();
+
+    for (const line of lines) {
+        if (line.startsWith('diff --git ')) {
+            inPkgJson = pkgPattern.test(line);
+            continue;
+        }
+        if (!inPkgJson) continue;
+
+        for (const fw of TEST_FRAMEWORKS) {
+            const quoted = `"${fw}"`;
+            if (
+                line.startsWith('+') &&
+                !line.startsWith('+++') &&
+                line.includes(quoted)
+            ) {
+                addedDeps.add(fw);
+            }
+            if (
+                (line.startsWith('-') &&
+                    !line.startsWith('---') &&
+                    line.includes(quoted)) ||
+                (line.startsWith(' ') && line.includes(quoted))
+            ) {
+                existingDeps.add(fw);
+            }
+        }
+    }
+
+    const addedFamilies = new Set(
+        [...addedDeps].map((d) => FRAMEWORK_FAMILIES[d]).filter(Boolean),
+    );
+    const existingFamilies = new Set(
+        [...existingDeps].map((d) => FRAMEWORK_FAMILIES[d]).filter(Boolean),
+    );
+
+    for (const addedFamily of addedFamilies) {
+        for (const existingFamily of existingFamilies) {
+            if (addedFamily !== existingFamily) {
+                const addedPkgs = [...addedDeps].filter(
+                    (d) => FRAMEWORK_FAMILIES[d] === addedFamily,
+                );
+                const existingPkgs = [...existingDeps].filter(
+                    (d) => FRAMEWORK_FAMILIES[d] === existingFamily,
+                );
+                warnings.push({
+                    type: 'test_framework_conflict',
+                    message: `Diff adds ${addedFamily} (${addedPkgs.join(', ')}) but repo already uses ${existingFamily} (${existingPkgs.join(', ')})`,
+                });
+            }
+        }
+    }
+
+    return warnings;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Quality signals (#47590)
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface QualitySignal {
+    type: string;
+    excerpt: string;
+}
+
+const REGRESSION_PATTERNS = [
+    /\b(?:degradation|regression|slower|worse|performance (?:loss|decrease|drop))\b/i,
+    /\bcaused?\s+(?:a\s+)?(?:measurable|noticeable|significant)\s+(?:performance\s+)?(?:degradation|regression)\b/i,
+];
+
+const DOUBT_PATTERNS = [
+    /\b(?:however|unfortunately),?\s+(?:the\s+change|this|it)\s+(?:was|is|caused?|did)\b/i,
+    /\bexplicitly\s+requested\b/i,
+    /\bthe\s+ticket\s+said\s+to\b/i,
+];
+
+/**
+ * Extract quality signals from commit messages, PR descriptions, and plan text.
+ * These help reviewers prioritize which diffs need closer scrutiny.
+ */
+export function extractQualitySignals(texts: string[]): QualitySignal[] {
+    const signals: QualitySignal[] = [];
+    const combined = texts.join('\n');
+
+    for (const pattern of REGRESSION_PATTERNS) {
+        const match = combined.match(pattern);
+        if (match) {
+            const idx = match.index!;
+            const start = combined.lastIndexOf('.', idx);
+            const end = combined.indexOf('.', idx + match[0].length);
+            const excerpt = combined
+                .slice(
+                    start >= 0 ? start + 1 : Math.max(0, idx - 80),
+                    end >= 0
+                        ? end + 1
+                        : Math.min(
+                              combined.length,
+                              idx + match[0].length + 80,
+                          ),
+                )
+                .trim();
+            signals.push({ type: 'self_acknowledged_regression', excerpt });
+            break; // one per pattern family
+        }
+    }
+
+    for (const pattern of DOUBT_PATTERNS) {
+        const match = combined.match(pattern);
+        if (match) {
+            const idx = match.index!;
+            const start = combined.lastIndexOf('.', idx);
+            const end = combined.indexOf('.', idx + match[0].length);
+            const excerpt = combined
+                .slice(
+                    start >= 0 ? start + 1 : Math.max(0, idx - 80),
+                    end >= 0
+                        ? end + 1
+                        : Math.min(
+                              combined.length,
+                              idx + match[0].length + 80,
+                          ),
+                )
+                .trim();
+            signals.push({ type: 'implementation_doubt', excerpt });
+            break;
+        }
+    }
+
+    // Check for audit/log redaction
+    if (
+        /\bredact(?:ed|ing|ion)?\b/i.test(combined) &&
+        /\b(?:audit|log(?:ging)?)\b/i.test(combined)
+    ) {
+        signals.push({
+            type: 'audit_data_redaction',
+            excerpt:
+                'Session redacts data in audit/logging context — verify this is intentional',
+        });
+    }
+
+    return signals;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Duplicate session detection (#47588)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Normalize a session title for duplicate comparison: lowercase, strip emoji,
+ * strip common prefixes like test/fix/chore, collapse whitespace.
+ */
+export function normalizeTitle(title: string): string {
+    return title
+        .replace(/[\u{1F000}-\u{1FFFF}]/gu, '') // strip emoji
+        .toLowerCase()
+        .replace(/^(test|fix|chore|feat|refactor|perf|style|docs)[\s:/-]*/i, '')
+        .replace(/\b(add|unit|tests?|for|in|of|the|a|an)\b/g, '')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function wordOverlap(a: string, b: string): number {
+    const wordsA = new Set(a.split(/\s+/).filter((w) => w.length > 2));
+    const wordsB = new Set(b.split(/\s+/).filter((w) => w.length > 2));
+    if (wordsA.size === 0 && wordsB.size === 0) return 0;
+    const intersection = [...wordsA].filter((w) => wordsB.has(w));
+    return intersection.length / Math.max(wordsA.size, wordsB.size);
+}
+
+/**
+ * Find duplicate session pairs: same source + similar normalized title.
+ * Returns a map from session ID to array of duplicate session IDs.
+ */
+export function detectDuplicates(
+    sessions: Session[],
+): Map<string, string[]> {
+    const dupes = new Map<string, string[]>();
+
+    for (let i = 0; i < sessions.length; i++) {
+        for (let j = i + 1; j < sessions.length; j++) {
+            const a = sessions[i];
+            const b = sessions[j];
+            if (a.sourceContext.source !== b.sourceContext.source) continue;
+
+            const titleA = normalizeTitle(a.title ?? a.id);
+            const titleB = normalizeTitle(b.title ?? b.id);
+
+            const similar =
+                titleA === titleB ||
+                titleA.includes(titleB) ||
+                titleB.includes(titleA) ||
+                wordOverlap(titleA, titleB) > 0.6;
+
+            if (similar) {
+                if (!dupes.has(a.id)) dupes.set(a.id, []);
+                if (!dupes.has(b.id)) dupes.set(b.id, []);
+                dupes.get(a.id)!.push(b.id);
+                dupes.get(b.id)!.push(a.id);
+            }
+        }
+    }
+
+    return dupes;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Raw diff extraction (shared helper for warning/signal scanners)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract the raw unified diff text and review-relevant prose from the final
+ * change activity in a session. Returns the concatenated diff patches and an
+ * array of text blobs (commit messages, PR descriptions, plan text) suitable
+ * for scanning by quality-signal detectors.
+ */
+export function extractReviewContext(
+    session: Session,
+    activities: Activity[],
+): { rawDiff: string; proseTexts: string[] } {
+    const changeActivities = activities.filter((a) =>
+        a.artifacts?.some((art) => art.changeSet?.gitPatch),
+    );
+    const last = changeActivities[changeActivities.length - 1];
+
+    const diffParts: string[] = [];
+    const proseTexts: string[] = [];
+
+    if (last?.artifacts) {
+        for (const art of last.artifacts) {
+            const gp = art.changeSet?.gitPatch;
+            if (!gp) continue;
+            if (gp.unidiffPatch) diffParts.push(gp.unidiffPatch);
+            if (gp.suggestedCommitMessage)
+                proseTexts.push(gp.suggestedCommitMessage);
+        }
+    }
+
+    // PR description
+    const prDesc = session.outputs?.[0]?.pullRequest?.description;
+    if (prDesc) proseTexts.push(prDesc);
+
+    // Plan step text
+    const planActivity = activities.find((a) => a.planGenerated);
+    if (planActivity?.planGenerated) {
+        for (const step of planActivity.planGenerated.plan.steps) {
+            proseTexts.push(step.title);
+            if (step.description) proseTexts.push(step.description);
+        }
+    }
+
+    return { rawDiff: diffParts.join('\n'), proseTexts };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Lockfile / binary helpers
+// ────────────────────────────────────────────────────────────────────────────
+
 /**
  * Filenames treated as generated/lockfile artifacts that are excluded from
  * diff output by default — they bloat context without adding review value.

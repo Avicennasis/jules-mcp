@@ -9,6 +9,7 @@ import {
     formatSessionCompact,
     summarizeChangeset,
     changeSummaryLine,
+    detectDuplicates,
     type ChangeSummary,
 } from '../formatters.js';
 import { JulesAPIError, JulesStateError } from '../errors.js';
@@ -184,6 +185,12 @@ export function registerSessionTools(
                 .describe(
                     'Auto-follow pagination up to this many pages before returning. Defaults to 1, or 10 when `source` is set (to gather matches across pages). Hard-capped at 20.',
                 ),
+            detect_duplicates: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Flag sessions with similar titles targeting the same repo as potential duplicates. Annotates output with duplicate markers.',
+                ),
         },
         async ({
             page_size,
@@ -192,6 +199,7 @@ export function registerSessionTools(
             compact,
             detect_changes,
             max_pages,
+            detect_duplicates: detectDupes,
         }) => {
             try {
                 // When filtering by source, scan more pages by default so matches
@@ -244,13 +252,32 @@ export function registerSessionTools(
                     }
                 }
 
+                // Optional duplicate detection
+                const dupeMap = detectDupes
+                    ? detectDuplicates(sessions)
+                    : new Map<string, string[]>();
+
                 const text = sessions
                     .map((s) => {
                         const change = changeMap.get(s.id);
-                        if (compact) return formatSessionCompact(s, change);
+                        const dupes = dupeMap.get(s.id);
+                        if (compact) {
+                            let line = formatSessionCompact(s, change);
+                            if (dupes?.length) {
+                                line += `  [dup: ${dupes.join(', ')}]`;
+                            }
+                            return line;
+                        }
                         const block = formatSession(s);
-                        return change
-                            ? `${block}\n${changeSummaryLine(change)}`
+                        const extras: string[] = [];
+                        if (change) extras.push(changeSummaryLine(change));
+                        if (dupes?.length) {
+                            extras.push(
+                                `Possible duplicates: ${dupes.join(', ')}`,
+                            );
+                        }
+                        return extras.length
+                            ? `${block}\n${extras.join('\n')}`
                             : block;
                     })
                     .join(compact ? '\n' : '\n\n---\n\n');
