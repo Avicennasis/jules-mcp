@@ -76,7 +76,7 @@ export interface ChangeSummary {
  */
 export function summarizeChangeset(
     activities: Activity[],
-    opts?: { includeLockfiles?: boolean },
+    opts?: { includeLockfiles?: boolean; includeJournalFiles?: boolean },
 ): ChangeSummary {
     const empty: ChangeSummary = {
         hasChanges: false,
@@ -98,6 +98,7 @@ export function summarizeChangeset(
     let insertions = 0;
     let deletions = 0;
     let skippingLockfile = false;
+    let skippingJournal = false;
 
     for (const art of last.artifacts) {
         const gp = art.changeSet?.gitPatch;
@@ -114,18 +115,20 @@ export function summarizeChangeset(
                     : line.replace('diff --git ', '');
                 skippingLockfile =
                     !opts?.includeLockfiles && isLockfile(filePath);
+                skippingJournal =
+                    !opts?.includeJournalFiles && isJournalFile(filePath);
                 current = {
                     file: filePath,
                     insertions: 0,
                     deletions: 0,
                 };
-                if (!skippingLockfile) {
+                if (!skippingLockfile && !skippingJournal) {
                     files.push(current);
                 }
                 inBinary = false;
                 continue;
             }
-            if (skippingLockfile) continue;
+            if (skippingLockfile || skippingJournal) continue;
             if (line.startsWith('GIT binary patch')) {
                 inBinary = true;
                 continue;
@@ -552,6 +555,7 @@ function wordOverlap(a: string, b: string): number {
  */
 export function detectDuplicates(
     sessions: Session[],
+    changeMap?: Map<string, ChangeSummary>,
 ): Map<string, string[]> {
     const dupes = new Map<string, string[]>();
 
@@ -570,7 +574,25 @@ export function detectDuplicates(
                 titleB.includes(titleA) ||
                 wordOverlap(titleA, titleB) > 0.6;
 
-            if (similar) {
+            // File-path overlap: if both sessions have change data,
+            // check whether they modified overlapping files.
+            let fileOverlap = false;
+            if (changeMap && !similar) {
+                const filesA = changeMap.get(a.id)?.files.map(f => f.file);
+                const filesB = changeMap.get(b.id)?.files.map(f => f.file);
+                if (filesA?.length && filesB?.length) {
+                    const setA = new Set(filesA);
+                    const shared = filesB.filter(f => setA.has(f));
+                    // Flag as duplicate if any non-trivial file overlap exists.
+                    // Ignore if the only shared file is a journal/config file.
+                    const meaningful = shared.filter(f =>
+                        !f.startsWith('.jules/') && !f.startsWith('.Jules/')
+                    );
+                    fileOverlap = meaningful.length > 0;
+                }
+            }
+
+            if (similar || fileOverlap) {
                 if (!dupes.has(a.id)) dupes.set(a.id, []);
                 if (!dupes.has(b.id)) dupes.set(b.id, []);
                 dupes.get(a.id)!.push(b.id);
@@ -654,6 +676,10 @@ function isLockfile(filePath: string): boolean {
     return LOCKFILE_PATTERNS.includes(basename);
 }
 
+function isJournalFile(filePath: string): boolean {
+    return filePath.startsWith('.jules/') || filePath.startsWith('.Jules/');
+}
+
 export interface FilteredDiff {
     filtered: string;
     excluded: string[];
@@ -693,6 +719,40 @@ export function stripLockfileDiffs(diff: string): FilteredDiff {
         if (!skipping) {
             out.push(line);
         }
+    }
+
+    return { filtered: out.join('\n'), excluded };
+}
+
+/**
+ * Strip .jules/ journal-file diffs from a unified diff, replacing each
+ * with a one-line summary. Returns the filtered patch and the list of
+ * excluded file paths.
+ */
+export function stripJournalDiffs(diff: string): FilteredDiff {
+    const lines = diff.split('\n');
+    const out: string[] = [];
+    const excluded: string[] = [];
+    let skipping = false;
+    let currentFile = '';
+
+    for (const line of lines) {
+        if (line.startsWith('diff --git ')) {
+            const match = line.match(/ b\/(.+)$/);
+            currentFile = match ? match[1] : '';
+            if (isJournalFile(currentFile)) {
+                skipping = true;
+                excluded.push(currentFile);
+                out.push(`diff --git a/${currentFile} b/${currentFile}`);
+                out.push(`  [journal file ${currentFile} — diff omitted to avoid merge conflicts]`);
+                continue;
+            }
+            skipping = false;
+            out.push(line);
+            continue;
+        }
+        if (skipping) continue;
+        out.push(line);
     }
 
     return { filtered: out.join('\n'), excluded };
@@ -743,7 +803,7 @@ export const DIFF_AUTO_SUMMARY_THRESHOLD = 50_000;
 export function formatSessionDiff(
     session: Session,
     activities: Activity[],
-    opts?: { includeLockfiles?: boolean },
+    opts?: { includeLockfiles?: boolean; includeJournalFiles?: boolean },
 ): string {
     const parts: string[] = [];
     parts.push(`Session: ${session.title ?? session.id}`);
@@ -775,6 +835,11 @@ export function formatSessionDiff(
                 let diff = stripBinaryHunks(p.unidiffPatch ?? '');
                 if (!opts?.includeLockfiles) {
                     const { filtered, excluded } = stripLockfileDiffs(diff);
+                    diff = filtered;
+                    excludedFiles.push(...excluded);
+                }
+                if (!opts?.includeJournalFiles) {
+                    const { filtered, excluded } = stripJournalDiffs(diff);
                     diff = filtered;
                     excludedFiles.push(...excluded);
                 }
@@ -818,11 +883,12 @@ export interface PullResult {
     commitMessage?: string;
     files: FileChange[];
     excludedLockfiles?: string[];
+    excludedJournalFiles?: string[];
 }
 
 export function extractPatch(
     activities: Activity[],
-    opts?: { includeLockfiles?: boolean },
+    opts?: { includeLockfiles?: boolean; includeJournalFiles?: boolean },
 ): PullResult | null {
     const changeActivities = activities.filter((a) =>
         a.artifacts?.some((art) => art.changeSet?.gitPatch),
@@ -833,6 +899,7 @@ export function extractPatch(
     const patches: string[] = [];
     let commitMessage: string | undefined;
     const excludedFiles: string[] = [];
+    const excludedJournalFilesList: string[] = [];
 
     for (const art of last.artifacts) {
         const gp = art.changeSet?.gitPatch;
@@ -846,6 +913,11 @@ export function extractPatch(
             cleaned = filtered;
             excludedFiles.push(...excluded);
         }
+        if (!opts?.includeJournalFiles) {
+            const { filtered, excluded } = stripJournalDiffs(cleaned);
+            cleaned = filtered;
+            excludedJournalFilesList.push(...excluded);
+        }
         patches.push(cleaned);
     }
 
@@ -854,16 +926,18 @@ export function extractPatch(
     const summary = summarizeChangeset(activities, {
         includeLockfiles: opts?.includeLockfiles,
     });
-    // Filter out excluded lockfiles from the file summary too
-    const files = opts?.includeLockfiles
+    // Filter out excluded lockfiles and journal files from the file summary too
+    const allExcluded = [...excludedFiles, ...excludedJournalFilesList];
+    const files = (opts?.includeLockfiles && opts?.includeJournalFiles)
         ? summary.files
-        : summary.files.filter((f) => !excludedFiles.includes(f.file));
+        : summary.files.filter((f) => !allExcluded.includes(f.file));
 
     return {
         patch: patches.join('\n'),
         commitMessage,
         files,
         excludedLockfiles: excludedFiles.length > 0 ? excludedFiles : undefined,
+        excludedJournalFiles: excludedJournalFilesList.length > 0 ? excludedJournalFilesList : undefined,
     };
 }
 
