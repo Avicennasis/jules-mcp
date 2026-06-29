@@ -151,7 +151,7 @@ export function registerSessionTools(
 
     server.tool(
         'jules_list_sessions',
-        'List Jules coding sessions. Supports filtering by source repo, a compact one-line-per-session mode, optional change detection, and multi-page scanning.',
+        'List Jules coding sessions. Supports filtering by source repo, a compact one-line-per-session mode, optional change detection, and multi-page scanning. Note: session states in list results may be slightly stale (seconds) compared to get_session due to upstream API propagation delays — use get_session for authoritative state checks on individual sessions.',
         {
             page_size: z
                 .number()
@@ -189,7 +189,7 @@ export function registerSessionTools(
                 .boolean()
                 .default(false)
                 .describe(
-                    'Flag sessions with similar titles targeting the same repo as potential duplicates. Annotates output with duplicate markers.',
+                    'Flag sessions with similar titles targeting the same repo as potential duplicates. When used with detect_changes, also flags sessions that modify the same files. Annotates output with duplicate markers.',
                 ),
         },
         async ({
@@ -254,7 +254,7 @@ export function registerSessionTools(
 
                 // Optional duplicate detection
                 const dupeMap = detectDupes
-                    ? detectDuplicates(sessions)
+                    ? detectDuplicates(sessions, changeMap.size > 0 ? changeMap : undefined)
                     : new Map<string, string[]>();
 
                 const text = sessions

@@ -7,6 +7,7 @@ import {
     truncatePatch,
     stripBinaryHunks,
     stripLockfileDiffs,
+    stripJournalDiffs,
     LOCKFILE_PATTERNS,
     DIFF_AUTO_SUMMARY_THRESHOLD,
     formatSessionDiff,
@@ -15,7 +16,9 @@ import {
     changeSummaryLine,
     summarizeSessionDiff,
     extractPatch,
+    detectDuplicates,
 } from '../src/formatters.js';
+import type { ChangeSummary } from '../src/formatters.js';
 import type { Session, Activity, Plan } from '../src/types.js';
 
 describe('describeState', () => {
@@ -836,5 +839,220 @@ describe('formatSessionDiff lockfile filtering', () => {
         expect(out).toContain('big.ts');
         // Should NOT contain the raw diff lines
         expect(out.split('\n').length).toBeLessThan(50);
+    });
+});
+
+describe('detectDuplicates', () => {
+    const baseSession: Session = {
+        name: 'sessions/abc',
+        id: 'abc',
+        prompt: 'fix the bug',
+        title: 'Bug Fix',
+        sourceContext: { source: 'sources/github/o/r' },
+        createTime: '2026-01-01T00:00:00Z',
+        updateTime: '2026-01-01T01:00:00Z',
+        state: 'COMPLETED',
+        url: 'https://jules.google/sessions/abc',
+        outputs: [],
+    };
+
+    it('flags sessions that modify the same file via changeMap', () => {
+        const s1: Session = { ...baseSession, id: 'a1', title: 'Refactor auth' };
+        const s2: Session = { ...baseSession, id: 'a2', title: 'Add logging' };
+        const changeMap = new Map<string, ChangeSummary>([
+            ['a1', { hasChanges: true, changedFiles: 1, insertions: 5, deletions: 2, files: [{ file: 'src/app.ts', insertions: 5, deletions: 2 }] }],
+            ['a2', { hasChanges: true, changedFiles: 1, insertions: 3, deletions: 1, files: [{ file: 'src/app.ts', insertions: 3, deletions: 1 }] }],
+        ]);
+        const dupes = detectDuplicates([s1, s2], changeMap);
+        expect(dupes.has('a1')).toBe(true);
+        expect(dupes.get('a1')).toContain('a2');
+        expect(dupes.get('a2')).toContain('a1');
+    });
+
+    it('does not flag sessions modifying different files', () => {
+        const s1: Session = { ...baseSession, id: 'b1', title: 'Refactor auth' };
+        const s2: Session = { ...baseSession, id: 'b2', title: 'Add logging' };
+        const changeMap = new Map<string, ChangeSummary>([
+            ['b1', { hasChanges: true, changedFiles: 1, insertions: 5, deletions: 2, files: [{ file: 'src/app.ts', insertions: 5, deletions: 2 }] }],
+            ['b2', { hasChanges: true, changedFiles: 1, insertions: 3, deletions: 1, files: [{ file: 'src/utils.ts', insertions: 3, deletions: 1 }] }],
+        ]);
+        const dupes = detectDuplicates([s1, s2], changeMap);
+        expect(dupes.has('b1')).toBe(false);
+        expect(dupes.has('b2')).toBe(false);
+    });
+
+    it('ignores .jules/ files in overlap', () => {
+        const s1: Session = { ...baseSession, id: 'c1', title: 'Task one' };
+        const s2: Session = { ...baseSession, id: 'c2', title: 'Task two' };
+        const changeMap = new Map<string, ChangeSummary>([
+            ['c1', { hasChanges: true, changedFiles: 1, insertions: 1, deletions: 0, files: [{ file: '.jules/sentinel.md', insertions: 1, deletions: 0 }] }],
+            ['c2', { hasChanges: true, changedFiles: 1, insertions: 1, deletions: 0, files: [{ file: '.jules/sentinel.md', insertions: 1, deletions: 0 }] }],
+        ]);
+        const dupes = detectDuplicates([s1, s2], changeMap);
+        expect(dupes.has('c1')).toBe(false);
+        expect(dupes.has('c2')).toBe(false);
+    });
+
+    it('works without changeMap (existing behavior)', () => {
+        const s1: Session = { ...baseSession, id: 'd1', title: 'Bug Fix' };
+        const s2: Session = { ...baseSession, id: 'd2', title: 'Bug Fix' };
+        const dupes = detectDuplicates([s1, s2]);
+        expect(dupes.has('d1')).toBe(true);
+        expect(dupes.get('d1')).toContain('d2');
+        expect(dupes.get('d2')).toContain('d1');
+    });
+});
+
+describe('stripJournalDiffs', () => {
+    it('strips .jules/ journal file diffs and lists excluded files', () => {
+        const diff = [
+            'diff --git a/src/app.ts b/src/app.ts',
+            '--- a/src/app.ts',
+            '+++ b/src/app.ts',
+            '+real code change',
+            'diff --git a/.jules/sentinel.md b/.jules/sentinel.md',
+            '--- /dev/null',
+            '+++ b/.jules/sentinel.md',
+            '+journal content',
+            '+more journal lines',
+            'diff --git a/src/util.ts b/src/util.ts',
+            '+another real change',
+        ].join('\n');
+        const { filtered, excluded } = stripJournalDiffs(diff);
+        expect(excluded).toEqual(['.jules/sentinel.md']);
+        expect(filtered).toContain('+real code change');
+        expect(filtered).toContain('+another real change');
+        expect(filtered).not.toContain('+journal content');
+        expect(filtered).not.toContain('+more journal lines');
+        expect(filtered).toContain('journal file .jules/sentinel.md');
+    });
+
+    it('strips .Jules/ (capital J) journal files', () => {
+        const diff = [
+            'diff --git a/.Jules/palette.md b/.Jules/palette.md',
+            '--- /dev/null',
+            '+++ b/.Jules/palette.md',
+            '+palette content',
+            'diff --git a/src/main.ts b/src/main.ts',
+            '+code',
+        ].join('\n');
+        const { filtered, excluded } = stripJournalDiffs(diff);
+        expect(excluded).toEqual(['.Jules/palette.md']);
+        expect(filtered).not.toContain('+palette content');
+        expect(filtered).toContain('+code');
+    });
+
+    it('passes through non-journal diffs unchanged', () => {
+        const diff = [
+            'diff --git a/src/main.ts b/src/main.ts',
+            '+code',
+        ].join('\n');
+        const { filtered, excluded } = stripJournalDiffs(diff);
+        expect(excluded).toEqual([]);
+        expect(filtered).toBe(diff);
+    });
+
+    it('strips multiple journal files in one diff', () => {
+        const diff = [
+            'diff --git a/.jules/sentinel.md b/.jules/sentinel.md',
+            '+sentinel stuff',
+            'diff --git a/.jules/palette.md b/.jules/palette.md',
+            '+palette stuff',
+            'diff --git a/src/app.ts b/src/app.ts',
+            '+real code',
+        ].join('\n');
+        const { filtered, excluded } = stripJournalDiffs(diff);
+        expect(excluded).toEqual(['.jules/sentinel.md', '.jules/palette.md']);
+        expect(filtered).toContain('+real code');
+        expect(filtered).not.toContain('+sentinel stuff');
+        expect(filtered).not.toContain('+palette stuff');
+    });
+});
+
+describe('summarizeChangeset journal file filtering', () => {
+    it('excludes journal files from counts by default', () => {
+        const patchWithJournal = [
+            'diff --git a/src/app.ts b/src/app.ts',
+            '--- a/src/app.ts',
+            '+++ b/src/app.ts',
+            '+real code',
+            'diff --git a/.jules/sentinel.md b/.jules/sentinel.md',
+            '--- /dev/null',
+            '+++ b/.jules/sentinel.md',
+            ...Array.from({ length: 50 }, () => '+journal line'),
+        ].join('\n');
+        const cs = summarizeChangeset(changeActivities(patchWithJournal));
+        expect(cs.changedFiles).toBe(1);
+        expect(cs.files).toHaveLength(1);
+        expect(cs.files[0].file).toBe('src/app.ts');
+        expect(cs.insertions).toBe(1);
+        expect(cs.deletions).toBe(0);
+    });
+
+    it('includes journal files when opted in', () => {
+        const patchWithJournal = [
+            'diff --git a/src/app.ts b/src/app.ts',
+            '+real code',
+            'diff --git a/.jules/sentinel.md b/.jules/sentinel.md',
+            '+journal line',
+        ].join('\n');
+        const cs = summarizeChangeset(changeActivities(patchWithJournal), {
+            includeJournalFiles: true,
+        });
+        expect(cs.changedFiles).toBe(2);
+        expect(cs.files).toHaveLength(2);
+        expect(cs.insertions).toBe(2);
+    });
+});
+
+describe('extractPatch journal file filtering', () => {
+    const journalPatch = [
+        'diff --git a/src/app.ts b/src/app.ts',
+        '--- a/src/app.ts',
+        '+++ b/src/app.ts',
+        '+real code',
+        'diff --git a/.jules/sentinel.md b/.jules/sentinel.md',
+        '--- /dev/null',
+        '+++ b/.jules/sentinel.md',
+        '+journal bulk',
+    ].join('\n');
+
+    const activities: Activity[] = [
+        {
+            name: 's/1',
+            id: '1',
+            createTime: 't',
+            originator: 'agent',
+            artifacts: [
+                {
+                    changeSet: {
+                        source: 'sources/github/o/r',
+                        gitPatch: {
+                            unidiffPatch: journalPatch,
+                            baseCommitId: 'b',
+                            suggestedCommitMessage: 'fix it',
+                        },
+                    },
+                },
+            ],
+        },
+    ];
+
+    it('excludes journal files by default', () => {
+        const result = extractPatch(activities);
+        expect(result).not.toBeNull();
+        expect(result!.patch).not.toContain('+journal bulk');
+        expect(result!.patch).toContain('+real code');
+        expect(result!.excludedJournalFiles).toEqual(['.jules/sentinel.md']);
+        expect(result!.files.some((f) => f.file === '.jules/sentinel.md')).toBe(
+            false,
+        );
+    });
+
+    it('includes journal files when opted in', () => {
+        const result = extractPatch(activities, { includeJournalFiles: true });
+        expect(result).not.toBeNull();
+        expect(result!.patch).toContain('+journal bulk');
+        expect(result!.excludedJournalFiles).toBeUndefined();
     });
 });

@@ -53,8 +53,14 @@ export function registerDiffTools(
                 .describe(
                     'Include lockfile diffs (pnpm-lock.yaml, package-lock.json, yarn.lock, etc.) in the output. Default false — lockfiles are excluded to keep output readable.',
                 ),
+            include_journal_files: z
+                .boolean()
+                .default(true)
+                .describe(
+                    'Include .jules/ journal file diffs (sentinel.md, palette.md) in the output. Default true for review context. Set false to strip them.',
+                ),
         },
-        async ({ session_id, summary, include_lockfiles }) => {
+        async ({ session_id, summary, include_lockfiles, include_journal_files }) => {
             try {
                 const session = await client.getSession(session_id);
                 const { activities } = await client.listActivities(
@@ -65,6 +71,7 @@ export function registerDiffTools(
                     ? summarizeSessionDiff(session, activities)
                     : formatSessionDiff(session, activities, {
                           includeLockfiles: include_lockfiles,
+                          includeJournalFiles: include_journal_files,
                       });
 
                 // Scan for review warnings and quality signals
@@ -105,8 +112,14 @@ export function registerDiffTools(
                 .describe(
                     'Include lockfile diffs in the patch output. Default false — lockfiles are excluded to keep output manageable.',
                 ),
+            include_journal_files: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Include .jules/ journal file diffs in the patch output. Default false — journal files are excluded from patches to avoid merge conflicts when applying multiple session patches to the same repo.',
+                ),
         },
-        async ({ session_id, include_lockfiles }) => {
+        async ({ session_id, include_lockfiles, include_journal_files }) => {
             try {
                 const session = await client.getSession(session_id);
                 const { activities } = await client.listActivities(
@@ -115,6 +128,7 @@ export function registerDiffTools(
                 );
                 const result = extractPatch(activities, {
                     includeLockfiles: include_lockfiles,
+                    includeJournalFiles: include_journal_files,
                 });
 
                 if (!result) {
@@ -161,6 +175,16 @@ export function registerDiffTools(
                     );
                     headerParts.push(
                         'Use include_lockfiles=true to include them.',
+                    );
+                }
+
+                if (result.excludedJournalFiles?.length) {
+                    headerParts.push('');
+                    headerParts.push(
+                        `Journal files excluded (${result.excludedJournalFiles.length}): ${result.excludedJournalFiles.join(', ')}`,
+                    );
+                    headerParts.push(
+                        'Use include_journal_files=true to include them.',
                     );
                 }
 
