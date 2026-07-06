@@ -58,11 +58,13 @@ describe('emitAudit', () => {
         );
     });
 
-    it('includes optional target and payload args', async () => {
+    it('includes optional target; payload travels via stdin, not argv (B1-116)', async () => {
         const mockExecFile = vi.mocked(execFile);
+        const stdinWrite = vi.fn();
+        const stdinEnd = vi.fn();
         mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
             if (typeof cb === 'function') cb(null, '', '');
-            return {} as any;
+            return { stdin: { write: stdinWrite, end: stdinEnd } } as any;
         });
 
         await emitAudit({
@@ -74,16 +76,40 @@ describe('emitAudit', () => {
         const args = mockExecFile.mock.calls[0][1] as string[];
         expect(args).toContain('--target');
         expect(args[args.indexOf('--target') + 1]).toBe('session-xyz');
+        // argv carries only the '-' sentinel; JSON goes to stdin
         expect(args).toContain('--payload');
-        const payloadStr = args[args.indexOf('--payload') + 1];
-        expect(JSON.parse(payloadStr)).toEqual({ prompt: 'fix the bug' });
+        expect(args[args.indexOf('--payload') + 1]).toBe('-');
+        expect(args.some((a) => a.includes('fix the bug'))).toBe(false);
+        expect(stdinWrite).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(stdinWrite.mock.calls[0][0] as string)).toEqual({
+            prompt: 'fix the bug',
+        });
+        expect(stdinEnd).toHaveBeenCalled();
+    });
+
+    it('closes stdin without writing when there is no payload', async () => {
+        const mockExecFile = vi.mocked(execFile);
+        const stdinWrite = vi.fn();
+        const stdinEnd = vi.fn();
+        mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
+            if (typeof cb === 'function') cb(null, '', '');
+            return { stdin: { write: stdinWrite, end: stdinEnd } } as any;
+        });
+
+        await emitAudit(baseOpts);
+
+        const args = mockExecFile.mock.calls[0][1] as string[];
+        expect(args).not.toContain('--payload');
+        expect(stdinWrite).not.toHaveBeenCalled();
+        expect(stdinEnd).toHaveBeenCalled();
     });
 
     it('never includes API key in payload', async () => {
         const mockExecFile = vi.mocked(execFile);
+        const stdinWrite = vi.fn();
         mockExecFile.mockImplementation((_cmd, _args, _opts, cb) => {
             if (typeof cb === 'function') cb(null, '', '');
-            return {} as any;
+            return { stdin: { write: stdinWrite, end: vi.fn() } } as any;
         });
 
         await emitAudit({
@@ -91,8 +117,7 @@ describe('emitAudit', () => {
             payload: { prompt: 'test', apiKey: 'SHOULD_NOT_APPEAR' },
         });
 
-        const args = mockExecFile.mock.calls[0][1] as string[];
-        const payloadStr = args[args.indexOf('--payload') + 1];
+        const payloadStr = stdinWrite.mock.calls[0][0] as string;
         // The audit module passes payload through — the caller is responsible
         // for not including secrets. This test documents the expectation.
         expect(payloadStr).not.toContain('JULES_API_KEY');

@@ -68,10 +68,10 @@ npm test           # 89 unit tests
 
 The server reads two environment variables:
 
-| Variable               | Required | Purpose                                                                                                                                                                 |
-| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                        |
-| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`). |
+| Variable               | Required | Purpose                                                                                                                                                                                                                                                                                     |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                            |
+| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling). |
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
@@ -187,6 +187,8 @@ Or skip the babysitting with **`jules_run_task`**, which does create → approve
 `jules_schedule_task` registers a cron job inside the running server (via `node-cron`). When it fires, it creates a Jules session with the stored prompt/source/branch and emits an audit record.
 
 Schedules persist to `~/.local/share/jules-mcp/schedules.enc`, **encrypted with AES-256-GCM** (key from `JULES_ENCRYPTION_KEY` or an auto-generated local key). They reload on startup. Because the cron runs in-process, the server must be running for schedules to fire — for always-on scheduling, keep the MCP host alive or wrap it in a service manager.
+
+> **Security note — auto-generated key.** When `JULES_ENCRYPTION_KEY` is unset, the auto-generated key is persisted as plaintext hex at `~/.local/share/jules-mcp/.key` (file mode `0600`, directory `0700`, re-tightened on every load). That protects against other unprivileged users, but anyone who can read your home directory — root, backup processes, or a misconfigured share — can decrypt `schedules.enc` with it. On multi-user or shared systems, set `JULES_ENCRYPTION_KEY` from your secret manager instead so the key never touches disk. Schedule entries can contain prompts and repo names; treat them accordingly.
 
 ## Audit logging
 

@@ -235,3 +235,29 @@ describe('JulesClient', () => {
         });
     });
 });
+
+describe('request timeout (B1-118)', () => {
+    it('defaults to a 30s AbortSignal timeout', async () => {
+        const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+        mockFetch.mockResolvedValueOnce(jsonResponse({ sources: [] }));
+
+        const client = new JulesClient('test-api-key');
+        await client.listSources();
+
+        expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+        timeoutSpy.mockRestore();
+    });
+
+    it('honors a per-client requestTimeoutMs override', async () => {
+        const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+        mockFetch.mockResolvedValueOnce(jsonResponse({ sources: [] }));
+
+        const client = new JulesClient('test-api-key', {
+            requestTimeoutMs: 120_000,
+        });
+        await client.listSources();
+
+        expect(timeoutSpy).toHaveBeenCalledWith(120_000);
+        timeoutSpy.mockRestore();
+    });
+});

@@ -15,6 +15,11 @@ import {
 
 const BASE_URL = 'https://jules.googleapis.com/v1alpha';
 
+/** Default per-request timeout (ms). Override per client via the
+ * constructor `requestTimeoutMs` option, or per call via the request()
+ * `timeoutMs` parameter (B1-118). */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 export interface CreateSessionRequest {
     prompt: string;
     sourceContext: SourceContext;
@@ -25,15 +30,19 @@ export interface CreateSessionRequest {
 
 export class JulesClient {
     private readonly apiKey: string;
+    private readonly requestTimeoutMs: number;
 
-    constructor(apiKey: string) {
+    constructor(apiKey: string, opts?: { requestTimeoutMs?: number }) {
         this.apiKey = apiKey;
+        this.requestTimeoutMs =
+            opts?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     }
 
     private async request<T>(
         path: string,
         method: 'GET' | 'POST' | 'DELETE' = 'GET',
         body?: unknown,
+        timeoutMs?: number,
     ): Promise<T> {
         const url = `${BASE_URL}${path}`;
         const headers: Record<string, string> = {
@@ -43,7 +52,7 @@ export class JulesClient {
         const init: RequestInit = {
             method,
             headers,
-            signal: AbortSignal.timeout(30000),
+            signal: AbortSignal.timeout(timeoutMs ?? this.requestTimeoutMs),
         };
 
         if (body) {

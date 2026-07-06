@@ -109,3 +109,34 @@ describe('ScheduleManager', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 });
+
+describe('ScheduleStore key file permissions (B1-117)', () => {
+    it('re-tightens a loosened .key file to 0600 on load', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jules-test-'));
+        try {
+            // First construction auto-generates the key
+            new ScheduleStore(undefined, tmpDir);
+            const keyPath = path.join(tmpDir, '.key');
+            expect(fs.existsSync(keyPath)).toBe(true);
+
+            // Loosen it, then construct again — permissions must re-tighten
+            fs.chmodSync(keyPath, 0o644);
+            new ScheduleStore(undefined, tmpDir);
+            const mode = fs.statSync(keyPath).mode & 0o777;
+            expect(mode).toBe(0o600);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it('auto-generated .key is created with 0600', () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jules-test-'));
+        try {
+            new ScheduleStore(undefined, tmpDir);
+            const mode = fs.statSync(path.join(tmpDir, '.key')).mode & 0o777;
+            expect(mode).toBe(0o600);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+});

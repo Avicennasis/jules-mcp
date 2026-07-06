@@ -26,6 +26,14 @@ export class ScheduleStore {
             fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
             const keyPath = path.join(this.dir, '.key');
             if (fs.existsSync(keyPath)) {
+                // Re-tighten permissions on every load in case the file was
+                // created by an older version or loosened externally (B1-117).
+                try {
+                    fs.chmodSync(keyPath, 0o600);
+                } catch {
+                    // Best-effort — reading still works; the key file's
+                    // exposure model is documented in README (Security).
+                }
                 this.key = Buffer.from(
                     fs.readFileSync(keyPath, 'utf-8').trim(),
                     'hex',

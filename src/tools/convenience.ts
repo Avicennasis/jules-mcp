@@ -3,7 +3,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
 import { emitAudit } from '../audit.js';
 import { formatSession } from '../formatters.js';
-import { TERMINAL_STATES, normalizeResourceName } from '../types.js';
+import {
+    TERMINAL_STATES,
+    normalizeResourceName,
+    type Session,
+} from '../types.js';
 import { JulesAPIError } from '../errors.js';
 
 function errorResponse(error: unknown) {
@@ -30,13 +34,92 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+interface PollOptions {
+    autoApprove: boolean;
+    pollIntervalMs: number;
+    deadline: number;
+    normalizedSource: string;
+    reason: string;
+}
+
+type PollOutcome =
+    | { outcome: 'terminal'; session: Session }
+    | { outcome: 'awaiting_plan_approval'; session: Session }
+    | { outcome: 'awaiting_user_feedback'; session: Session }
+    | { outcome: 'timeout'; session: Session }
+    | { outcome: 'error'; session: Session; error: string };
+
+/** What pollToCompletion itself can return — the 'error' variant is only
+ * synthesized by parallel mode's per-session catch. */
+type LivePollOutcome = Exclude<PollOutcome, { outcome: 'error' }>;
+
+/**
+ * Poll one session until it reaches a terminal state, needs a human, or
+ * the deadline passes. Auto-approves plans when opts.autoApprove is set.
+ * Shared by single and parallel run_task modes (B1-119).
+ */
+async function pollToCompletion(
+    client: JulesClient,
+    session: Session,
+    opts: PollOptions,
+): Promise<LivePollOutcome> {
+    let current = session;
+    while (!TERMINAL_STATES.has(current.state) && Date.now() < opts.deadline) {
+        if (current.state === 'AWAITING_PLAN_APPROVAL' && opts.autoApprove) {
+            current = await client.approvePlan(current.id);
+            await emitAudit({
+                source: 'jules-mcp',
+                category: 'coding-task',
+                action: 'POST',
+                service: opts.normalizedSource,
+                reason: `Auto-approved plan for run_task: ${opts.reason}`,
+                target: current.id,
+            });
+            await sleep(opts.pollIntervalMs);
+            current = await client.getSession(current.id);
+            continue;
+        }
+
+        if (current.state === 'AWAITING_PLAN_APPROVAL' && !opts.autoApprove) {
+            return { outcome: 'awaiting_plan_approval', session: current };
+        }
+
+        if (current.state === 'AWAITING_USER_FEEDBACK') {
+            return { outcome: 'awaiting_user_feedback', session: current };
+        }
+
+        await sleep(opts.pollIntervalMs);
+        current = await client.getSession(current.id);
+    }
+
+    return TERMINAL_STATES.has(current.state)
+        ? { outcome: 'terminal', session: current }
+        : { outcome: 'timeout', session: current };
+}
+
+/** One-line human note for a parallel-mode per-session outcome. */
+function outcomeNote(o: PollOutcome): string {
+    switch (o.outcome) {
+        case 'terminal':
+            return `Reached terminal state ${o.session.state}.`;
+        case 'awaiting_plan_approval':
+            return 'Plan ready for review — approve with jules_approve_plan.';
+        case 'awaiting_user_feedback':
+            return 'Needs user feedback — respond with jules_send_message.';
+        case 'timeout':
+            return `Timed out while still ${o.session.state} — poll with jules_get_session.`;
+        case 'error':
+            return `Polling failed: ${o.error} — poll with jules_get_session.`;
+    }
+}
+
 export function registerConvenienceTools(
     server: McpServer,
     client: JulesClient,
 ): void {
     server.tool(
         'jules_run_task',
-        'Create a Jules session, poll until plan is ready, auto-approve, and wait for completion. One-shot fire-and-forget for trusted tasks.',
+        'Create a Jules session, poll until plan is ready, auto-approve, and wait for completion. One-shot fire-and-forget for trusted tasks. With parallel > 1, creates N independent sessions with the same prompt and polls them all concurrently to completion, returning a per-session outcome summary.',
         {
             prompt: z.string().describe('What Jules should do'),
             source: z.string().describe('Source name'),
@@ -106,7 +189,10 @@ export function registerConvenienceTools(
                                 title: title
                                     ? `${title} (${i + 1}/${parallel})`
                                     : undefined,
-                                requirePlanApproval: !auto_approve,
+                                // Same semantics as single mode: Jules always
+                                // requires approval; auto_approve controls
+                                // whether WE approve during polling.
+                                requirePlanApproval: true,
                                 automationMode: automation_mode,
                             }),
                         ),
@@ -129,11 +215,37 @@ export function registerConvenienceTools(
                         });
                     }
 
-                    const results = sessions.map((s) => ({
-                        id: s.id,
-                        state: s.state,
-                        url: s.url,
-                        title: s.title,
+                    // Poll ALL sessions to completion concurrently (B1-119 —
+                    // previously this returned immediately, contradicting the
+                    // tool description). A failure polling one session does
+                    // not abort the others.
+                    const deadline = Date.now() + timeout_ms;
+                    const outcomes = await Promise.all(
+                        sessions.map((s) =>
+                            pollToCompletion(client, s, {
+                                autoApprove: auto_approve,
+                                pollIntervalMs: poll_interval_ms,
+                                deadline,
+                                normalizedSource,
+                                reason,
+                            }).catch((error): PollOutcome => ({
+                                outcome: 'error',
+                                session: s,
+                                error: String(error),
+                            })),
+                        ),
+                    );
+
+                    const completed = outcomes.filter(
+                        (o) => o.outcome === 'terminal',
+                    ).length;
+                    const results = outcomes.map((o) => ({
+                        id: o.session.id,
+                        state: o.session.state,
+                        url: o.session.url,
+                        title: o.session.title,
+                        outcome: o.outcome,
+                        note: outcomeNote(o),
                     }));
 
                     return {
@@ -142,8 +254,11 @@ export function registerConvenienceTools(
                                 type: 'text' as const,
                                 text: JSON.stringify(
                                     {
-                                        status: 'OK',
-                                        message: `Created ${parallel} parallel sessions. Poll each with jules_get_session or jules_get_session_diff.`,
+                                        status:
+                                            completed === parallel
+                                                ? 'OK'
+                                                : 'PARTIAL',
+                                        message: `${completed}/${parallel} parallel sessions reached a terminal state.`,
                                         sessions: results,
                                     },
                                     null,
@@ -193,73 +308,49 @@ export function registerConvenienceTools(
                     payload: { prompt, title, mode: 'run_task' },
                 });
 
-                const deadline = Date.now() + timeout_ms;
+                // 2. Poll until terminal or needs action (shared helper)
+                const outcome = await pollToCompletion(client, session, {
+                    autoApprove: auto_approve,
+                    pollIntervalMs: poll_interval_ms,
+                    deadline: Date.now() + timeout_ms,
+                    normalizedSource,
+                    reason,
+                });
 
-                // 2. Poll until terminal or needs action
-                let current = session;
-                while (
-                    !TERMINAL_STATES.has(current.state) &&
-                    Date.now() < deadline
-                ) {
-                    if (
-                        current.state === 'AWAITING_PLAN_APPROVAL' &&
-                        auto_approve
-                    ) {
-                        current = await client.approvePlan(current.id);
-                        await emitAudit({
-                            source: 'jules-mcp',
-                            category: 'coding-task',
-                            action: 'POST',
-                            service: normalizedSource,
-                            reason: `Auto-approved plan for run_task: ${reason}`,
-                            target: current.id,
-                        });
-                        await sleep(poll_interval_ms);
-                        current = await client.getSession(current.id);
-                        continue;
-                    }
-
-                    if (
-                        current.state === 'AWAITING_PLAN_APPROVAL' &&
-                        !auto_approve
-                    ) {
-                        // User wants manual plan review — return so they can approve
-                        return {
-                            content: [
-                                {
-                                    type: 'text' as const,
-                                    text: `Session has a plan ready for review. Use jules_approve_plan to approve it.\n\n${formatSession(current)}`,
-                                },
-                            ],
-                        };
-                    }
-
-                    if (current.state === 'AWAITING_USER_FEEDBACK') {
-                        // Can't auto-handle user feedback — return current state
-                        return {
-                            content: [
-                                {
-                                    type: 'text' as const,
-                                    text: `Session needs user feedback. Use jules_send_message to respond.\n\n${formatSession(current)}`,
-                                },
-                            ],
-                        };
-                    }
-
-                    await sleep(poll_interval_ms);
-                    current = await client.getSession(current.id);
+                if (outcome.outcome === 'awaiting_plan_approval') {
+                    // User wants manual plan review — return so they can approve
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `Session has a plan ready for review. Use jules_approve_plan to approve it.\n\n${formatSession(outcome.session)}`,
+                            },
+                        ],
+                    };
                 }
 
-                if (!TERMINAL_STATES.has(current.state)) {
+                if (outcome.outcome === 'awaiting_user_feedback') {
+                    // Can't auto-handle user feedback — return current state
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `Session needs user feedback. Use jules_send_message to respond.\n\n${formatSession(outcome.session)}`,
+                            },
+                        ],
+                    };
+                }
+
+                if (outcome.outcome === 'timeout') {
                     return {
                         content: [
                             {
                                 type: 'text' as const,
                                 text: JSON.stringify({
                                     status: 'ERROR',
-                                    message: `Timed out after ${timeout_ms}ms. Session is still ${current.state}.`,
+                                    message: `Timed out after ${timeout_ms}ms. Session is still ${outcome.session.state}.`,
                                     code: 408,
-                                    session: formatSession(current),
+                                    session: formatSession(outcome.session),
                                 }),
                             },
                         ],
@@ -269,7 +360,10 @@ export function registerConvenienceTools(
 
                 return {
                     content: [
-                        { type: 'text' as const, text: formatSession(current) },
+                        {
+                            type: 'text' as const,
+                            text: formatSession(outcome.session),
+                        },
                     ],
                 };
             } catch (error) {

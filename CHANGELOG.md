@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `jules_run_task` parallel mode now polls all N sessions to completion
+  concurrently (auto-approving plans per session) and returns a per-session
+  outcome summary (`OK`/`PARTIAL`), matching the tool description instead of
+  returning immediately after creation. Parallel sessions are also created
+  with `requirePlanApproval: true` like single mode — `auto_approve` controls
+  whether the tool approves, not whether Jules skips approval (#47978).
+- `JulesClient` request timeout is configurable: per client via
+  `new JulesClient(key, { requestTimeoutMs })` or per call; default remains
+  30s (#47977).
+
+### Security
+
+- Audit payloads are passed to `inkwell-emit` via stdin (`--payload -`)
+  instead of a CLI argument, keeping prompt text out of
+  `/proc/PID/cmdline` (#47975).
+- The auto-generated schedule encryption key file is re-tightened to mode
+  `0600` on every load, and the README now documents why multi-user systems
+  should prefer `JULES_ENCRYPTION_KEY` from a secret manager (#47976).
+
 ## [0.4.0] - 2026-06-23
 
 ### Added

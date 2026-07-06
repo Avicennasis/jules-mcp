@@ -45,17 +45,37 @@ function emitViaInkwell(opts: AuditOptions): Promise<void> {
             args.push('--target', opts.target);
         }
 
+        // Payload travels via stdin ('--payload -'), never argv: argv is
+        // world-readable in /proc/PID/cmdline and payloads can carry
+        // sensitive prompt text (B1-116). inkwell-emit supports the '-'
+        // stdin convention.
+        let stdinPayload: string | undefined;
         if (opts.payload) {
-            args.push('--payload', JSON.stringify(opts.payload));
+            args.push('--payload', '-');
+            stdinPayload = JSON.stringify(opts.payload);
         }
 
-        execFile(INKWELL_BIN, args, { timeout: 5000 }, (error) => {
-            if (error) {
-                // Swallow — audit failures must never block mutations
-                console.error(`[audit] inkwell-emit failed: ${error.message}`);
+        const child = execFile(
+            INKWELL_BIN,
+            args,
+            { timeout: 5000 },
+            (error) => {
+                if (error) {
+                    // Swallow — audit failures must never block mutations
+                    console.error(
+                        `[audit] inkwell-emit failed: ${error.message}`,
+                    );
+                }
+                resolve();
+            },
+        );
+
+        if (child.stdin) {
+            if (stdinPayload !== undefined) {
+                child.stdin.write(stdinPayload);
             }
-            resolve();
-        });
+            child.stdin.end();
+        }
     });
 }
 
