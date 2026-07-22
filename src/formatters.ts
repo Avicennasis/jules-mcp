@@ -475,10 +475,7 @@ export function extractQualitySignals(texts: string[]): QualitySignal[] {
                     start >= 0 ? start + 1 : Math.max(0, idx - 80),
                     end >= 0
                         ? end + 1
-                        : Math.min(
-                              combined.length,
-                              idx + match[0].length + 80,
-                          ),
+                        : Math.min(combined.length, idx + match[0].length + 80),
                 )
                 .trim();
             signals.push({ type: 'self_acknowledged_regression', excerpt });
@@ -497,10 +494,7 @@ export function extractQualitySignals(texts: string[]): QualitySignal[] {
                     start >= 0 ? start + 1 : Math.max(0, idx - 80),
                     end >= 0
                         ? end + 1
-                        : Math.min(
-                              combined.length,
-                              idx + match[0].length + 80,
-                          ),
+                        : Math.min(combined.length, idx + match[0].length + 80),
                 )
                 .trim();
             signals.push({ type: 'implementation_doubt', excerpt });
@@ -578,15 +572,17 @@ export function detectDuplicates(
             // check whether they modified overlapping files.
             let fileOverlap = false;
             if (changeMap && !similar) {
-                const filesA = changeMap.get(a.id)?.files.map(f => f.file);
-                const filesB = changeMap.get(b.id)?.files.map(f => f.file);
+                const filesA = changeMap.get(a.id)?.files.map((f) => f.file);
+                const filesB = changeMap.get(b.id)?.files.map((f) => f.file);
                 if (filesA?.length && filesB?.length) {
                     const setA = new Set(filesA);
-                    const shared = filesB.filter(f => setA.has(f));
+                    const shared = filesB.filter((f) => setA.has(f));
                     // Flag as duplicate if any non-trivial file overlap exists.
                     // Ignore if the only shared file is a journal/config file.
-                    const meaningful = shared.filter(f =>
-                        !f.startsWith('.jules/') && !f.startsWith('.Jules/')
+                    const meaningful = shared.filter(
+                        (f) =>
+                            !f.startsWith('.jules/') &&
+                            !f.startsWith('.Jules/'),
                     );
                     fileOverlap = meaningful.length > 0;
                 }
@@ -704,9 +700,7 @@ export function stripLockfileDiffs(diff: string): FilteredDiff {
             if (isLockfile(currentFile)) {
                 skipping = true;
                 excluded.push(currentFile);
-                out.push(
-                    `diff --git a/${currentFile} b/${currentFile}`,
-                );
+                out.push(`diff --git a/${currentFile} b/${currentFile}`);
                 out.push(
                     `  [lockfile ${currentFile} — diff omitted (${LOCKFILE_PATTERNS.length} known patterns filtered)]`,
                 );
@@ -744,7 +738,9 @@ export function stripJournalDiffs(diff: string): FilteredDiff {
                 skipping = true;
                 excluded.push(currentFile);
                 out.push(`diff --git a/${currentFile} b/${currentFile}`);
-                out.push(`  [journal file ${currentFile} — diff omitted to avoid merge conflicts]`);
+                out.push(
+                    `  [journal file ${currentFile} — diff omitted to avoid merge conflicts]`,
+                );
                 continue;
             }
             skipping = false;
@@ -928,16 +924,20 @@ export function extractPatch(
     });
     // Filter out excluded lockfiles and journal files from the file summary too
     const allExcluded = [...excludedFiles, ...excludedJournalFilesList];
-    const files = (opts?.includeLockfiles && opts?.includeJournalFiles)
-        ? summary.files
-        : summary.files.filter((f) => !allExcluded.includes(f.file));
+    const files =
+        opts?.includeLockfiles && opts?.includeJournalFiles
+            ? summary.files
+            : summary.files.filter((f) => !allExcluded.includes(f.file));
 
     return {
         patch: patches.join('\n'),
         commitMessage,
         files,
         excludedLockfiles: excludedFiles.length > 0 ? excludedFiles : undefined,
-        excludedJournalFiles: excludedJournalFilesList.length > 0 ? excludedJournalFilesList : undefined,
+        excludedJournalFiles:
+            excludedJournalFilesList.length > 0
+                ? excludedJournalFilesList
+                : undefined,
     };
 }
 

@@ -65,7 +65,13 @@ export function registerSourceTools(
                     'Filter to only repos with suggestions enabled (tracked in local config). Useful for checking the suggestions quota (5 repos max).',
                 ),
         },
-        async ({ page_size, page_token, filter, max_pages, suggestions_only }) => {
+        async ({
+            page_size,
+            page_token,
+            filter,
+            max_pages,
+            suggestions_only,
+        }) => {
             try {
                 const limit = Math.min(max_pages ?? 10, 20);
                 const allSources: Record<string, unknown>[] = [];
@@ -101,8 +107,7 @@ export function registerSourceTools(
                 if (suggestions_only && configStore) {
                     filtered = allSources.filter((s) => {
                         const cfg = s.localConfig as
-                            | { suggestionsEnabled?: boolean }
-                            | undefined;
+                            { suggestionsEnabled?: boolean } | undefined;
                         return cfg?.suggestionsEnabled === true;
                     });
                 }
@@ -267,10 +272,9 @@ export function registerSourceTools(
                                     status: 'OK',
                                     count: configs.length,
                                     suggestionsQuota: `${suggestionsEnabled.length}/5 slots used`,
-                                    suggestionsRepos:
-                                        suggestionsEnabled.map(
-                                            (c) => c.sourceId,
-                                        ),
+                                    suggestionsRepos: suggestionsEnabled.map(
+                                        (c) => c.sourceId,
+                                    ),
                                     configs,
                                 },
                                 null,
