@@ -683,10 +683,9 @@ describe('stripLockfileDiffs', () => {
     });
 
     it('passes through non-lockfile diffs unchanged', () => {
-        const diff = [
-            'diff --git a/src/main.ts b/src/main.ts',
-            '+code',
-        ].join('\n');
+        const diff = ['diff --git a/src/main.ts b/src/main.ts', '+code'].join(
+            '\n',
+        );
         const { filtered, excluded } = stripLockfileDiffs(diff);
         expect(excluded).toEqual([]);
         expect(filtered).toBe(diff);
@@ -857,11 +856,37 @@ describe('detectDuplicates', () => {
     };
 
     it('flags sessions that modify the same file via changeMap', () => {
-        const s1: Session = { ...baseSession, id: 'a1', title: 'Refactor auth' };
+        const s1: Session = {
+            ...baseSession,
+            id: 'a1',
+            title: 'Refactor auth',
+        };
         const s2: Session = { ...baseSession, id: 'a2', title: 'Add logging' };
         const changeMap = new Map<string, ChangeSummary>([
-            ['a1', { hasChanges: true, changedFiles: 1, insertions: 5, deletions: 2, files: [{ file: 'src/app.ts', insertions: 5, deletions: 2 }] }],
-            ['a2', { hasChanges: true, changedFiles: 1, insertions: 3, deletions: 1, files: [{ file: 'src/app.ts', insertions: 3, deletions: 1 }] }],
+            [
+                'a1',
+                {
+                    hasChanges: true,
+                    changedFiles: 1,
+                    insertions: 5,
+                    deletions: 2,
+                    files: [
+                        { file: 'src/app.ts', insertions: 5, deletions: 2 },
+                    ],
+                },
+            ],
+            [
+                'a2',
+                {
+                    hasChanges: true,
+                    changedFiles: 1,
+                    insertions: 3,
+                    deletions: 1,
+                    files: [
+                        { file: 'src/app.ts', insertions: 3, deletions: 1 },
+                    ],
+                },
+            ],
         ]);
         const dupes = detectDuplicates([s1, s2], changeMap);
         expect(dupes.has('a1')).toBe(true);
@@ -870,11 +895,37 @@ describe('detectDuplicates', () => {
     });
 
     it('does not flag sessions modifying different files', () => {
-        const s1: Session = { ...baseSession, id: 'b1', title: 'Refactor auth' };
+        const s1: Session = {
+            ...baseSession,
+            id: 'b1',
+            title: 'Refactor auth',
+        };
         const s2: Session = { ...baseSession, id: 'b2', title: 'Add logging' };
         const changeMap = new Map<string, ChangeSummary>([
-            ['b1', { hasChanges: true, changedFiles: 1, insertions: 5, deletions: 2, files: [{ file: 'src/app.ts', insertions: 5, deletions: 2 }] }],
-            ['b2', { hasChanges: true, changedFiles: 1, insertions: 3, deletions: 1, files: [{ file: 'src/utils.ts', insertions: 3, deletions: 1 }] }],
+            [
+                'b1',
+                {
+                    hasChanges: true,
+                    changedFiles: 1,
+                    insertions: 5,
+                    deletions: 2,
+                    files: [
+                        { file: 'src/app.ts', insertions: 5, deletions: 2 },
+                    ],
+                },
+            ],
+            [
+                'b2',
+                {
+                    hasChanges: true,
+                    changedFiles: 1,
+                    insertions: 3,
+                    deletions: 1,
+                    files: [
+                        { file: 'src/utils.ts', insertions: 3, deletions: 1 },
+                    ],
+                },
+            ],
         ]);
         const dupes = detectDuplicates([s1, s2], changeMap);
         expect(dupes.has('b1')).toBe(false);
@@ -885,8 +936,38 @@ describe('detectDuplicates', () => {
         const s1: Session = { ...baseSession, id: 'c1', title: 'Task one' };
         const s2: Session = { ...baseSession, id: 'c2', title: 'Task two' };
         const changeMap = new Map<string, ChangeSummary>([
-            ['c1', { hasChanges: true, changedFiles: 1, insertions: 1, deletions: 0, files: [{ file: '.jules/sentinel.md', insertions: 1, deletions: 0 }] }],
-            ['c2', { hasChanges: true, changedFiles: 1, insertions: 1, deletions: 0, files: [{ file: '.jules/sentinel.md', insertions: 1, deletions: 0 }] }],
+            [
+                'c1',
+                {
+                    hasChanges: true,
+                    changedFiles: 1,
+                    insertions: 1,
+                    deletions: 0,
+                    files: [
+                        {
+                            file: '.jules/sentinel.md',
+                            insertions: 1,
+                            deletions: 0,
+                        },
+                    ],
+                },
+            ],
+            [
+                'c2',
+                {
+                    hasChanges: true,
+                    changedFiles: 1,
+                    insertions: 1,
+                    deletions: 0,
+                    files: [
+                        {
+                            file: '.jules/sentinel.md',
+                            insertions: 1,
+                            deletions: 0,
+                        },
+                    ],
+                },
+            ],
         ]);
         const dupes = detectDuplicates([s1, s2], changeMap);
         expect(dupes.has('c1')).toBe(false);
@@ -943,10 +1024,9 @@ describe('stripJournalDiffs', () => {
     });
 
     it('passes through non-journal diffs unchanged', () => {
-        const diff = [
-            'diff --git a/src/main.ts b/src/main.ts',
-            '+code',
-        ].join('\n');
+        const diff = ['diff --git a/src/main.ts b/src/main.ts', '+code'].join(
+            '\n',
+        );
         const { filtered, excluded } = stripJournalDiffs(diff);
         expect(excluded).toEqual([]);
         expect(filtered).toBe(diff);

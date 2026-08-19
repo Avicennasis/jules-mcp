@@ -254,7 +254,10 @@ export function registerSessionTools(
 
                 // Optional duplicate detection
                 const dupeMap = detectDupes
-                    ? detectDuplicates(sessions, changeMap.size > 0 ? changeMap : undefined)
+                    ? detectDuplicates(
+                          sessions,
+                          changeMap.size > 0 ? changeMap : undefined,
+                      )
                     : new Map<string, string[]>();
 
                 const text = sessions
