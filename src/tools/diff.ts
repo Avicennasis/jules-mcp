@@ -60,7 +60,12 @@ export function registerDiffTools(
                     'Include .jules/ journal file diffs (sentinel.md, palette.md) in the output. Default true for review context. Set false to strip them.',
                 ),
         },
-        async ({ session_id, summary, include_lockfiles, include_journal_files }) => {
+        async ({
+            session_id,
+            summary,
+            include_lockfiles,
+            include_journal_files,
+        }) => {
             try {
                 const session = await client.getSession(session_id);
                 const { activities } = await client.listActivities(
@@ -194,9 +199,7 @@ export function registerDiffTools(
                     '',
                 );
 
-                const header = headerParts
-                    .filter((l) => l !== null)
-                    .join('\n');
+                const header = headerParts.filter((l) => l !== null).join('\n');
 
                 return {
                     content: [
