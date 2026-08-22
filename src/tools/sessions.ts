@@ -402,19 +402,41 @@ export function registerSessionTools(
         },
         async ({ session_id, message, reason }) => {
             try {
-                const session = await client.sendMessage(session_id, message);
+                const sent = await client.sendMessage(session_id, message);
+
+                // Past this point the message HAS been delivered. The endpoint
+                // returns google.protobuf.Empty, so `sent` carries no session
+                // fields; re-read the session for real state. Nothing below may
+                // report failure — doing so would tell the caller a delivered
+                // message failed, and invite a duplicate retry (#30).
+                let session: Session | undefined = sent?.sourceContext
+                    ? sent
+                    : undefined;
+                if (!session) {
+                    try {
+                        session = await client.getSession(session_id);
+                    } catch {
+                        // Leave undefined; the send still succeeded.
+                    }
+                }
+
                 await emitAudit({
                     source: 'jules-mcp',
                     category: 'coding-task',
                     action: 'POST',
-                    service: session.sourceContext.source,
+                    service: session?.sourceContext?.source ?? session_id,
                     reason,
-                    target: session.id,
+                    target: session?.id ?? session_id,
                     payload: { message },
                 });
                 return {
                     content: [
-                        { type: 'text' as const, text: formatSession(session) },
+                        {
+                            type: 'text' as const,
+                            text: session
+                                ? formatSession(session)
+                                : `Message sent to session ${session_id}. The API returned no session payload and re-reading the session failed, so current state is unknown — the message was delivered.`,
+                        },
                     ],
                 };
             } catch (error) {

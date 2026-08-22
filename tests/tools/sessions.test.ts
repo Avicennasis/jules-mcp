@@ -155,6 +155,62 @@ describe('session tools', () => {
         expect(mockClient.approvePlan).not.toHaveBeenCalled();
     });
 
+    // #30: the :sendMessage endpoint returns google.protobuf.Empty, so the
+    // response carries no session fields. Reading session.sourceContext.source
+    // for the audit entry threw AFTER the POST had already succeeded, so a
+    // delivered message was reported to the caller as a hard 500.
+    describe('jules_send_message with an empty API response', () => {
+        it('succeeds and falls back to fetching the session', async () => {
+            (mockClient.sendMessage as any).mockResolvedValue(undefined);
+            const handler = registeredTools.get('jules_send_message')!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                message: 'please revert',
+                reason: 'wrong premise',
+            });
+            expect(result.isError).toBeUndefined();
+            expect(mockClient.getSession).toHaveBeenCalledWith('abc');
+            expect(result.content[0].text).toContain('abc');
+        });
+
+        it('still reports success when the follow-up fetch fails', async () => {
+            // The message was delivered; a failure to re-read the session
+            // afterwards must not be reported as a failure to send.
+            (mockClient.sendMessage as any).mockResolvedValue(undefined);
+            (mockClient.getSession as any).mockRejectedValue(
+                new Error('transient'),
+            );
+            const handler = registeredTools.get('jules_send_message')!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                message: 'please revert',
+                reason: 'wrong premise',
+            });
+            expect(result.isError).toBeUndefined();
+            expect(result.content[0].text).toMatch(/sent|delivered/i);
+        });
+
+        it('emits an audit entry even without a session payload', async () => {
+            const { emitAudit } = await import('../../src/audit.js');
+            (mockClient.sendMessage as any).mockResolvedValue(undefined);
+            (mockClient.getSession as any).mockRejectedValue(
+                new Error('transient'),
+            );
+            const handler = registeredTools.get('jules_send_message')!.handler;
+            await handler({
+                session_id: 'abc',
+                message: 'please revert',
+                reason: 'wrong premise',
+            });
+            expect(emitAudit).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    action: 'POST',
+                    reason: 'wrong premise',
+                }),
+            );
+        });
+    });
+
     it('jules_get_session returns formatted session', async () => {
         const handler = registeredTools.get('jules_get_session')!.handler;
         const result = await handler({ session_id: 'abc' });

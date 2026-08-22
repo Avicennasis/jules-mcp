@@ -149,6 +149,23 @@ describe('JulesClient', () => {
             expect(body.prompt).toBe('hello there');
             expect(body.message).toBeUndefined();
         });
+
+        // The real endpoint returns google.protobuf.Empty. Parsing that as JSON
+        // threw, surfacing as a 500 to the caller even though the POST had
+        // already succeeded (#30).
+        it('resolves when the API returns a completely empty body', async () => {
+            mockFetch.mockResolvedValueOnce(new Response('', { status: 200 }));
+            await expect(
+                client.sendMessage('abc', 'hello'),
+            ).resolves.toBeUndefined();
+        });
+
+        it('resolves when the API returns an empty JSON object', async () => {
+            mockFetch.mockResolvedValueOnce(jsonResponse({}));
+            await expect(client.sendMessage('abc', 'hello')).resolves.toEqual(
+                {},
+            );
+        });
     });
 
     describe('archiveSession / unarchiveSession', () => {
