@@ -61,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interpolated into output as the literal string `undefined` — most visibly
   `Progress: undefined — undefined`, which was the majority case at 15 of 27
   progress activities in a real session (#42).
+- `compact: true` on `jules_list_sessions` did not produce one-line rows. Jules
+  sets `title` to the entire task prompt — multi-KB markdown with headings and
+  fenced code for generated tasks — so rows ran to dozens of lines and the flag
+  failed in exactly the high-session-count case it exists to serve.
+  `formatSessionCompact` now takes the first non-blank line of the title and
+  caps it at `COMPACT_TITLE_MAX_CHARS` (120), marking a truncated title with an
+  ellipsis. Measured on the 104 real GrantLoft sessions: **1,122 lines → 104**
+  (one per session), 47,213 → 11,490 characters (#32).
 
 ### Security
 
