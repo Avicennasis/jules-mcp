@@ -694,6 +694,67 @@ describe('formatSessionCompact', () => {
         expect(line).toContain('::  abc');
     });
 
+    // #32: `compact` is the flag you reach for precisely when there are many
+    // sessions, and it failed in exactly that case — Jules sets `title` to the
+    // entire multi-KB task prompt. Measured against the live API: of 179 real
+    // sessions, 18 titles contained newlines and the longest was 8,241 chars,
+    // against a median of 46. A fixture with a short title passes whether or
+    // not the fix works, so these use the real shapes.
+    describe('titles that are really full task prompts', () => {
+        const realWorldTitle =
+            '# 🧹 Code Health Improvement Task\n\nYou are a code health agent. Your mission is to analyze and fix a code health issue.\n\n## Task Details\n\n**File:** `public_html/components/vault/packet-creator-dialog.tsx:35`\n**Issue:** Function too long\n\n```typescript\nexport function PacketCreatorDialog() {\n```';
+
+        it('collapses a multi-line prompt title to one line', () => {
+            const line = formatSessionCompact({
+                ...session,
+                title: realWorldTitle,
+            });
+            expect(line.split('\n')).toHaveLength(1);
+        });
+
+        it('keeps the first line as the title', () => {
+            const line = formatSessionCompact({
+                ...session,
+                title: realWorldTitle,
+            });
+            expect(line).toContain('Code Health Improvement Task');
+            expect(line).not.toContain('Task Details');
+            expect(line).not.toContain('packet-creator-dialog');
+        });
+
+        it('caps a very long single-line title', () => {
+            const line = formatSessionCompact({
+                ...session,
+                title: 'x'.repeat(8241),
+            });
+            expect(line.length).toBeLessThan(300);
+            expect(line.split('\n')).toHaveLength(1);
+        });
+
+        it('marks a truncated title so the cut is visible', () => {
+            const line = formatSessionCompact({
+                ...session,
+                title: 'y'.repeat(500),
+            });
+            expect(line).toContain('…');
+        });
+
+        it('skips leading blank lines rather than emitting an empty title', () => {
+            const line = formatSessionCompact({
+                ...session,
+                title: '\n\n   \nActual title here\nmore',
+            });
+            expect(line).toContain('Actual title here');
+            expect(line.split('\n')).toHaveLength(1);
+        });
+
+        it('leaves a short single-line title exactly as it was', () => {
+            expect(formatSessionCompact(session)).toBe(
+                'COMPLETED  abc  o/r  ::  Fix the thing',
+            );
+        });
+    });
+
     it('appends a file count when a change summary is supplied', () => {
         const cs = summarizeChangeset(changeActivities(multiFilePatch));
         expect(formatSessionCompact(session, cs)).toContain('(2 files)');

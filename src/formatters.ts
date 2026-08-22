@@ -168,6 +168,31 @@ export function changeSummaryLine(change: ChangeSummary): string {
 }
 
 /**
+ * Maximum characters of title kept in a compact row. Titles are frequently the
+ * entire task prompt, so this is a hard cap rather than a hint.
+ */
+export const COMPACT_TITLE_MAX_CHARS = 120;
+
+/**
+ * Reduce a session title to something that fits on one line.
+ *
+ * Jules sets `title` to the full task prompt, which for generated tasks is
+ * multi-KB markdown — headings, fenced code, the whole agent brief. Rendering
+ * that verbatim is what made `compact` useless at the session counts it exists
+ * to serve (#32).
+ */
+function compactTitle(raw: string, fallback: string): string {
+    const firstLine = raw
+        .split('\n')
+        .find((l) => l.trim() !== '')
+        ?.trim();
+    if (!firstLine) return fallback;
+    return firstLine.length > COMPACT_TITLE_MAX_CHARS
+        ? firstLine.slice(0, COMPACT_TITLE_MAX_CHARS).trimEnd() + '…'
+        : firstLine;
+}
+
+/**
  * Compact one-line summary of a session for browsing long lists: state, id,
  * source (with the `sources/github/` prefix trimmed), and title. An optional
  * change summary appends a file count. Designed to stay greppable.
@@ -180,7 +205,7 @@ export function formatSessionCompact(
         /^sources\/github\//,
         '',
     );
-    const title = session.title ?? session.id;
+    const title = compactTitle(session.title ?? session.id, session.id);
     const archived = session.archived ? ' [archived]' : '';
     let line = `${session.state}${archived}  ${session.id}  ${source}  ::  ${title}`;
     if (change) {
