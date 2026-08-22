@@ -81,15 +81,20 @@ export interface PlanStep {
 }
 
 export interface Plan {
-    id: string;
-    steps: PlanStep[];
-    createTime: string;
+    id?: string;
+    /** proto3 omits repeated fields when empty, so an empty plan has no key */
+    steps?: PlanStep[];
+    createTime?: string;
 }
 
+// proto3 omits fields holding the default value from its JSON encoding, so a
+// gitPatch with an empty diff arrives with no `unidiffPatch` key at all. These
+// are optional on the wire; declaring them required let an unguarded deref
+// typecheck and 500 the whole activity listing (#42).
 export interface GitPatch {
-    unidiffPatch: string;
-    baseCommitId: string;
-    suggestedCommitMessage: string;
+    unidiffPatch?: string;
+    baseCommitId?: string;
+    suggestedCommitMessage?: string;
 }
 
 export interface ChangeSet {
@@ -114,31 +119,37 @@ export interface Artifact {
     bashOutput?: BashOutput;
 }
 
+// Every field below is omitted by proto3 when it holds the default value, so
+// each is optional on the wire however reliably it shows up in practice.
+// `progressUpdated` is the one that bites: it arrives as `{}` more often than
+// not — 15 of 27 progress activities in a real session rendered as
+// "Progress: undefined — undefined" before this was corrected (#42).
+
 export interface AgentMessaged {
-    agentMessage: string;
+    agentMessage?: string;
 }
 
 export interface UserMessaged {
-    userMessage: string;
+    userMessage?: string;
 }
 
 export interface PlanGenerated {
-    plan: Plan;
+    plan?: Plan;
 }
 
 export interface PlanApproved {
-    planId: string;
+    planId?: string;
 }
 
 export interface ProgressUpdated {
-    title: string;
-    description: string;
+    title?: string;
+    description?: string;
 }
 
 export interface SessionCompleted {}
 
 export interface SessionFailed {
-    reason: string;
+    reason?: string;
 }
 
 /**

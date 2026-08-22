@@ -220,6 +220,121 @@ describe('formatActivity', () => {
         };
         expect(formatActivity(activity)).toContain('Something happened');
     });
+
+    // #42: proto3 omits fields holding the default value, so a changeSet whose
+    // diff is empty comes back with NO `unidiffPatch` key at all. Reading it
+    // unguarded threw `TypeError: ...reading 'split'` and 500'd the whole
+    // jules_list_activities call. Shape taken from a real API response
+    // (session 10022951902196532692), where 8 of 26 activities carried a
+    // gitPatch whose only key was `baseCommitId`.
+    describe('changeSet artifacts with proto3-omitted fields', () => {
+        const activityWithPatchKeys = (gitPatch: Record<string, string>) =>
+            ({
+                name: 'sessions/abc/activities/5',
+                id: '5',
+                createTime: '2026-01-01T00:00:00Z',
+                originator: 'agent',
+                progressUpdated: {
+                    title: 'Working',
+                    description: 'No diff produced',
+                },
+                artifacts: [
+                    {
+                        changeSet: {
+                            source: 'sources/github/o/r',
+                            gitPatch,
+                        },
+                    },
+                ],
+            }) as unknown as Activity;
+
+        it('does not throw when unidiffPatch is absent', () => {
+            const activity = activityWithPatchKeys({ baseCommitId: 'abc123' });
+            expect(() => formatActivity(activity)).not.toThrow();
+        });
+
+        it('omits the Diff block entirely when there is no patch', () => {
+            const result = formatActivity(
+                activityWithPatchKeys({ baseCommitId: 'abc123' }),
+            );
+            expect(result).not.toContain('Diff:');
+            expect(result).toContain('abc123');
+        });
+
+        it('omits the commit message line rather than rendering "undefined"', () => {
+            const result = formatActivity(
+                activityWithPatchKeys({ baseCommitId: 'abc123' }),
+            );
+            expect(result).not.toContain('undefined');
+            expect(result).not.toContain('Commit message:');
+        });
+
+        it('still renders both lines when the fields are present', () => {
+            const result = formatActivity(
+                activityWithPatchKeys({
+                    unidiffPatch: 'diff --git a/x.js b/x.js\n+  hi',
+                    baseCommitId: 'abc123',
+                    suggestedCommitMessage: 'fix x',
+                }),
+            );
+            expect(result).toContain('Commit message: fix x');
+            expect(result).toContain('Diff:');
+            expect(result).toContain('x.js');
+        });
+    });
+
+    // #42, second half: the union MEMBER can be present while every field
+    // inside it is omitted. TypeScript cannot catch these — a template literal
+    // interpolates `undefined` quite happily — so they are only visible by
+    // running real payloads through. `progressUpdated: {}` was the majority
+    // case in a real session (15 of 27), rendering
+    // "Progress: undefined — undefined".
+    describe('union members whose fields are all proto3-omitted', () => {
+        const activityWith = (union: Record<string, unknown>) =>
+            ({
+                name: 'sessions/abc/activities/6',
+                id: '6',
+                createTime: '2026-01-01T00:00:00Z',
+                originator: 'agent',
+                ...union,
+            }) as unknown as Activity;
+
+        it.each([
+            ['progressUpdated', { progressUpdated: {} }],
+            ['agentMessaged', { agentMessaged: {} }],
+            ['userMessaged', { userMessaged: {} }],
+            ['planApproved', { planApproved: {} }],
+            ['sessionFailed', { sessionFailed: {} }],
+            ['planGenerated', { planGenerated: {} }],
+            [
+                'planGenerated with an empty plan',
+                { planGenerated: { plan: {} } },
+            ],
+        ])('never renders "undefined" for an empty %s', (_name, union) => {
+            const result = formatActivity(activityWith(union));
+            expect(result).not.toContain('undefined');
+        });
+
+        it('still renders progress detail when the fields are present', () => {
+            const result = formatActivity(
+                activityWith({
+                    progressUpdated: {
+                        title: 'Ran tests',
+                        description: '3 ok',
+                    },
+                }),
+            );
+            expect(result).toContain('Progress: Ran tests — 3 ok');
+        });
+
+        it('renders just the title when only the title is present', () => {
+            const result = formatActivity(
+                activityWith({ progressUpdated: { title: 'Ran tests' } }),
+            );
+            expect(result).toContain('Progress: Ran tests');
+            expect(result).not.toContain('—');
+        });
+    });
 });
 
 describe('stripBinaryHunks', () => {
