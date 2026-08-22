@@ -29,6 +29,11 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # vitest does not typecheck, and nothing else here ran tsc, so a
+      # TypeScript error could not fail CI at all. `build` is also what
+      # produces dist/ — the package's `main` — so this is the step that
+      # proves the shipped entry point can actually be produced.
+      - run: npm run build
       - run: npm test
 
   lint:
