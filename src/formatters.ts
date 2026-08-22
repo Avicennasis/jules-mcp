@@ -35,10 +35,11 @@ export function truncatePatch(patch: string, maxLines = 50): string {
 }
 
 export function formatPlan(plan: Plan): string {
-    const header = `Plan ${plan.id}:`;
+    const header = plan.id ? `Plan ${plan.id}:` : 'Plan:';
     // proto3 omits `index` when it is 0 (the default int value), so a missing
-    // index means step 0. Coerce to 0 before sorting/numbering.
-    const steps = [...plan.steps]
+    // index means step 0. Coerce to 0 before sorting/numbering. `steps` itself
+    // is omitted entirely when the plan is empty (#42).
+    const steps = [...(plan.steps ?? [])]
         .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
         .map((s) => {
             const heading = `${(s.index ?? 0) + 1}. ${s.title}`;
@@ -231,13 +232,22 @@ function formatArtifacts(artifacts: Artifact[]): string {
             const cs = artifact.changeSet;
             parts.push(`Change in ${cs.source}:`);
             if (cs.gitPatch) {
-                parts.push(
-                    `  Commit message: ${cs.gitPatch.suggestedCommitMessage}`,
-                );
-                parts.push(`  Base: ${cs.gitPatch.baseCommitId}`);
-                parts.push(
-                    `  Diff:\n${truncatePatch(cs.gitPatch.unidiffPatch)}`,
-                );
+                // Each field is omitted by proto3 when empty, so emit each
+                // line only when its field is actually present — rendering
+                // `undefined`, or splitting an absent patch, are both bugs
+                // that reached production here (#42).
+                const gp = cs.gitPatch;
+                if (gp.suggestedCommitMessage) {
+                    parts.push(
+                        `  Commit message: ${gp.suggestedCommitMessage}`,
+                    );
+                }
+                if (gp.baseCommitId) {
+                    parts.push(`  Base: ${gp.baseCommitId}`);
+                }
+                if (gp.unidiffPatch) {
+                    parts.push(`  Diff:\n${truncatePatch(gp.unidiffPatch)}`);
+                }
             }
         }
         if (artifact.bashOutput) {
@@ -260,24 +270,42 @@ export function formatActivity(activity: Activity): string {
 
     // Union members are top-level fields on the activity (protobuf oneof
     // flattened in JSON). Exactly one is present.
+    // proto3 omits empty fields, so every member below can be absent even when
+    // its union branch is present. Interpolating one directly puts the literal
+    // string "undefined" in front of the user — which is what shipped, most
+    // visibly as "Progress: undefined — undefined" (#42). Fall back to the
+    // branch's plain label instead of rendering a hole.
     if (activity.agentMessaged) {
-        parts.push(`[${time}] Agent: ${activity.agentMessaged.agentMessage}`);
+        const msg = activity.agentMessaged.agentMessage;
+        parts.push(msg ? `[${time}] Agent: ${msg}` : `[${time}] Agent message`);
     } else if (activity.userMessaged) {
-        parts.push(`[${time}] User: ${activity.userMessaged.userMessage}`);
+        const msg = activity.userMessaged.userMessage;
+        parts.push(msg ? `[${time}] User: ${msg}` : `[${time}] User message`);
     } else if (activity.planGenerated) {
         parts.push(`[${time}] Plan generated:`);
-        parts.push(formatPlan(activity.planGenerated.plan));
+        const plan = activity.planGenerated.plan;
+        if (plan) parts.push(formatPlan(plan));
     } else if (activity.planApproved) {
-        parts.push(`[${time}] Plan approved (${activity.planApproved.planId})`);
-    } else if (activity.progressUpdated) {
+        const planId = activity.planApproved.planId;
         parts.push(
-            `[${time}] Progress: ${activity.progressUpdated.title} — ${activity.progressUpdated.description}`,
+            planId
+                ? `[${time}] Plan approved (${planId})`
+                : `[${time}] Plan approved`,
+        );
+    } else if (activity.progressUpdated) {
+        const { title, description } = activity.progressUpdated;
+        const detail = [title, description].filter(Boolean).join(' — ');
+        parts.push(
+            detail ? `[${time}] Progress: ${detail}` : `[${time}] Progress`,
         );
     } else if (activity.sessionCompleted) {
         parts.push(`[${time}] Session completed`);
     } else if (activity.sessionFailed) {
+        const reason = activity.sessionFailed.reason;
         parts.push(
-            `[${time}] Session failed: ${activity.sessionFailed.reason}`,
+            reason
+                ? `[${time}] Session failed: ${reason}`
+                : `[${time}] Session failed`,
         );
     } else {
         parts.push(`[${time}] ${activity.description || 'Activity'}`);
@@ -691,7 +719,7 @@ export function extractReviewContext(
     // Plan step text
     const planActivity = activities.find((a) => a.planGenerated);
     if (planActivity?.planGenerated) {
-        for (const step of planActivity.planGenerated.plan.steps) {
+        for (const step of planActivity.planGenerated.plan?.steps ?? []) {
             proseTexts.push(step.title);
             if (step.description) proseTexts.push(step.description);
         }
@@ -862,7 +890,8 @@ export function formatSessionDiff(
     const planActivity = activities.find((a) => a.planGenerated);
     if (planActivity?.planGenerated) {
         parts.push('');
-        parts.push(formatPlan(planActivity.planGenerated.plan));
+        const plan = planActivity.planGenerated.plan;
+        if (plan) parts.push(formatPlan(plan));
     }
 
     const changeActivities = activities.filter((a) =>
@@ -1011,7 +1040,7 @@ export function summarizeSessionDiff(
 
     const planActivity = activities.find((a) => a.planGenerated);
     if (planActivity?.planGenerated) {
-        const stepCount = planActivity.planGenerated.plan.steps.length;
+        const stepCount = planActivity.planGenerated.plan?.steps?.length ?? 0;
         parts.push(`Plan: ${stepCount} step${stepCount === 1 ? '' : 's'}`);
     }
 

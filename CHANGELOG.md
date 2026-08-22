@@ -49,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit in the type, and the tool re-reads the session for real state. If
   that re-read fails the tool still reports success, because the message was
   delivered (#30).
+- `jules_list_activities` and `jules_get_activity` returned
+  `TypeError: Cannot read properties of undefined (reading 'split')` (500) for
+  any session whose log contained a `changeSet` artifact with no diff, making
+  the activity log unreadable for real sessions. proto3 omits fields holding
+  the default value, so `gitPatch` arrives with no `unidiffPatch` key at all;
+  the type declared it required, which let the unguarded deref typecheck. The
+  `GitPatch`, `Plan` and activity union-member types are now optional to match
+  the wire format, and each line is emitted only when its field is present.
+  This also stops the quieter half of the same bug: absent fields were being
+  interpolated into output as the literal string `undefined` — most visibly
+  `Progress: undefined — undefined`, which was the majority case at 15 of 27
+  progress activities in a real session (#42).
 
 ### Security
 
