@@ -22,8 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Note this reaches only tasks created through this server — Jules' own
   auto-generated suggestion tasks are created upstream and never pass through
   here (#38).
+- `jules_list_sessions` gains `stale_only`, selecting sessions that are
+  awaiting user feedback **and** produced no code changes — no PR, no diff,
+  waiting on feedback nobody is going to give. These accumulate: 37 of one
+  repo's 104 sessions were in that state, nearly all repeated persona runs.
+  This is the missing first half of the "show me the dead ones, archive them"
+  workflow that `jules_archive_session` already completes. It implies
+  `detect_changes`, narrows by state first so excluded sessions cost no API
+  call, and treats a failed activities fetch as unknown rather than as "no
+  changes". A general `state` filter is available alongside it (#36).
 
 ### Changed
+
+- `jules_list_sources` no longer returns every branch of every repo by default.
+  Branch counts grow without bound as Jules opens task branches, and the list
+  is usually irrelevant to the question being asked — measured across the 474
+  real connected sources, branches were 5,227 entries and 72.7% of the payload
+  (513,460 → 140,410 characters), with one repo carrying 515 on its own. Each
+  repo now reports `branchCount` and keeps `defaultBranch`; pass
+  `include_branches: true` for the full lists (#33).
 
 - `jules_run_task` parallel mode now polls all N sessions to completion
   concurrently (auto-approving plans per session) and returns a per-session
