@@ -38,7 +38,9 @@ describe('applyGuidance', () => {
     });
 
     it('returns the prompt untouched when guidance is empty', () => {
-        expect(applyGuidance('Just do the thing', '')).toBe('Just do the thing');
+        expect(applyGuidance('Just do the thing', '')).toBe(
+            'Just do the thing',
+        );
     });
 });
 
