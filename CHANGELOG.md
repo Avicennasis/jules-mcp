@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `detect_changes`, narrows by state first so excluded sessions cost no API
   call, and treats a failed activities fetch as unknown rather than as "no
   changes". A general `state` filter is available alongside it (#36).
+- `jules_list_activities` now documents what `page_token` actually is: a
+  nanoseconds-since-epoch cursor meaning "the first activity at or after time
+  T". It can therefore be constructed directly to seek to a timestamp rather
+  than paged through full diffs to reach one. Verified against the live API —
+  `1787346421522664000` returns activities starting exactly at
+  `2026-08-21T21:07:01.522664Z` (#41).
 
 ### Changed
 

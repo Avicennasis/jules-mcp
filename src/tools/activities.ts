@@ -37,7 +37,12 @@ export function registerActivityTools(
                 .number()
                 .optional()
                 .describe('Number of activities to return'),
-            page_token: z.string().optional().describe('Pagination token'),
+            page_token: z
+                .string()
+                .optional()
+                .describe(
+                    'Pagination token from a previous response. This is a nanoseconds-since-epoch cursor meaning "the first activity at or after time T", so it can also be constructed directly to seek to a timestamp instead of paging through full diffs to reach it — e.g. 1787346421522664000 is 2026-08-21T21:07:01.522664Z. Activities come back oldest-first.',
+                ),
         },
         async ({ session_id, page_size, page_token }) => {
             try {
