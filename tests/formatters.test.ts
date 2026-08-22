@@ -1067,8 +1067,8 @@ describe('detectDuplicates', () => {
         ]);
         const dupes = detectDuplicates([s1, s2], changeMap);
         expect(dupes.has('a1')).toBe(true);
-        expect(dupes.get('a1')).toContain('a2');
-        expect(dupes.get('a2')).toContain('a1');
+        expect(dupes.get('a1')?.map((d) => d.id)).toContain('a2');
+        expect(dupes.get('a2')?.map((d) => d.id)).toContain('a1');
     });
 
     it('does not flag sessions modifying different files', () => {
@@ -1156,8 +1156,152 @@ describe('detectDuplicates', () => {
         const s2: Session = { ...baseSession, id: 'd2', title: 'Bug Fix' };
         const dupes = detectDuplicates([s1, s2]);
         expect(dupes.has('d1')).toBe(true);
-        expect(dupes.get('d1')).toContain('d2');
-        expect(dupes.get('d2')).toContain('d1');
+        expect(dupes.get('d1')?.map((d) => d.id)).toContain('d2');
+        expect(dupes.get('d2')?.map((d) => d.id)).toContain('d1');
+        // Titles alone are the weakest available claim.
+        expect(dupes.get('d1')?.[0].strength).toBe('similar-title');
+    });
+
+    // #34: the concrete false positive. GrantLoft PRs #316 and #320 both edit
+    // public_html/lib/access-state.ts with similar titles, but in different
+    // functions — #316 around restoreAccess (line ~366) and #320 around
+    // checkAccessForAction (line ~440). They are complementary, and acting on
+    // an undifferentiated duplicate flag would have closed legitimate work.
+    describe('same file, different regions', () => {
+        const FILE = 'public_html/lib/access-state.ts';
+        const withHunks = (
+            id: string,
+            hunks: { start: number; end: number }[],
+        ): [string, ChangeSummary] => [
+            id,
+            {
+                hasChanges: true,
+                changedFiles: 1,
+                insertions: 5,
+                deletions: 2,
+                files: [{ file: FILE, insertions: 5, deletions: 2, hunks }],
+            },
+        ];
+
+        const sessionsPair = (t1: string, t2: string) => [
+            { ...baseSession, id: 'pr316', title: t1 },
+            { ...baseSession, id: 'pr320', title: t2 },
+        ];
+
+        it('reports same-file, not overlapping-hunks, for disjoint regions', () => {
+            const dupes = detectDuplicates(
+                sessionsPair(
+                    'Fix access state handling',
+                    'Fix access state checking',
+                ),
+                new Map<string, ChangeSummary>([
+                    withHunks('pr316', [{ start: 360, end: 372 }]),
+                    withHunks('pr320', [{ start: 434, end: 448 }]),
+                ]),
+            );
+            expect(dupes.get('pr316')?.[0].strength).toBe('same-file');
+            expect(dupes.get('pr320')?.[0].strength).toBe('same-file');
+        });
+
+        it('reports overlapping-hunks when the edits actually collide', () => {
+            const dupes = detectDuplicates(
+                sessionsPair(
+                    'Fix access state handling',
+                    'Fix access state checking',
+                ),
+                new Map<string, ChangeSummary>([
+                    withHunks('pr316', [{ start: 360, end: 372 }]),
+                    withHunks('pr320', [{ start: 366, end: 380 }]),
+                ]),
+            );
+            expect(dupes.get('pr316')?.[0].strength).toBe('overlapping-hunks');
+        });
+
+        it('still flags the pair — this is precision, not removal', () => {
+            // The feature correctly clusters ~40 redundant persona sessions,
+            // so a disjoint-region pair must still surface, just labelled.
+            const dupes = detectDuplicates(
+                sessionsPair(
+                    'Fix access state handling',
+                    'Fix access state checking',
+                ),
+                new Map<string, ChangeSummary>([
+                    withHunks('pr316', [{ start: 360, end: 372 }]),
+                    withHunks('pr320', [{ start: 434, end: 448 }]),
+                ]),
+            );
+            expect(dupes.has('pr316')).toBe(true);
+            expect(dupes.has('pr320')).toBe(true);
+        });
+
+        it('falls back to same-file when hunk data is unavailable', () => {
+            // Without ranges on both sides a shared path is all that can be
+            // claimed — it must not be upgraded to a collision.
+            const dupes = detectDuplicates(
+                sessionsPair('Task A', 'Task B'),
+                new Map<string, ChangeSummary>([
+                    withHunks('pr316', [{ start: 360, end: 372 }]),
+                    [
+                        'pr320',
+                        {
+                            hasChanges: true,
+                            changedFiles: 1,
+                            insertions: 1,
+                            deletions: 0,
+                            files: [
+                                { file: FILE, insertions: 1, deletions: 0 },
+                            ],
+                        },
+                    ],
+                ]),
+            );
+            expect(dupes.get('pr316')?.[0].strength).toBe('same-file');
+        });
+    });
+});
+
+describe('summarizeChangeset hunk ranges (#34)', () => {
+    it('captures post-image line ranges from @@ headers', () => {
+        const diff = [
+            'diff --git a/src/a.ts b/src/a.ts',
+            '--- a/src/a.ts',
+            '+++ b/src/a.ts',
+            '@@ -360,10 +366,7 @@ function restoreAccess() {',
+            '+  changed',
+            '@@ -434,4 +440,6 @@ function checkAccessForAction() {',
+            '+  also changed',
+        ].join('\n');
+        const summary = summarizeChangeset(changeActivities(diff));
+        expect(summary.files[0].hunks).toEqual([
+            { start: 366, end: 372 },
+            { start: 440, end: 445 },
+        ]);
+    });
+
+    it('treats a hunk header with no count as a single line', () => {
+        const diff = [
+            'diff --git a/src/a.ts b/src/a.ts',
+            '--- a/src/a.ts',
+            '+++ b/src/a.ts',
+            '@@ -5 +7 @@',
+            '+  one line',
+        ].join('\n');
+        const summary = summarizeChangeset(changeActivities(diff));
+        expect(summary.files[0].hunks).toEqual([{ start: 7, end: 7 }]);
+    });
+
+    it('does not count @@ headers as content lines', () => {
+        const diff = [
+            'diff --git a/src/a.ts b/src/a.ts',
+            '--- a/src/a.ts',
+            '+++ b/src/a.ts',
+            '@@ -1,2 +1,3 @@',
+            '+added',
+            '-removed',
+        ].join('\n');
+        const summary = summarizeChangeset(changeActivities(diff));
+        expect(summary.insertions).toBe(1);
+        expect(summary.deletions).toBe(1);
     });
 });
 

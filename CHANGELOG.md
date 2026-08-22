@@ -86,6 +86,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quota now labels it as local, names the file it came from, and publishes the
   age of the oldest record (`suggestionsOldestRecord`,
   `suggestionsRecordAgeDays`, `suggestionsStale` past 30 days) (#35).
+- `detect_duplicates` reported "these two sessions edit the same file" and
+  "these two sessions edit the same lines" identically, so two complementary
+  changes to different functions of one file looked exactly like real
+  duplication — acting on the flag without reading both diffs could close
+  legitimate work. `summarizeChangeset` now records each file's post-image
+  hunk ranges from the `@@` headers, and every duplicate match carries a
+  strength: `overlapping-hunks` (the edits collide), `same-file` (shared path,
+  disjoint regions) or `similar-title` (titles only). The feature is
+  deliberately not narrowed — clustering repeated persona runs is its main
+  value — so pairs are still flagged, just labelled. `detectDuplicates` now
+  returns `Map<string, DuplicateMatch[]>` rather than `Map<string, string[]>`
+  (#34).
 
 ### Security
 
