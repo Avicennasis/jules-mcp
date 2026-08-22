@@ -204,7 +204,19 @@ export function registerSessionTools(
                 .boolean()
                 .default(false)
                 .describe(
-                    'Flag sessions with similar titles targeting the same repo as potential duplicates. When used with detect_changes, also flags sessions that modify the same files. Annotates output with duplicate markers.',
+                    'Flag sessions with similar titles targeting the same repo as potential duplicates. Each match is annotated with how strong the claim is: overlapping-hunks (the edits collide), same-file (shared file, different regions) or similar-title (titles only). When used with detect_changes, hunk ranges make the strong claim available.',
+                ),
+            state: z
+                .string()
+                .optional()
+                .describe(
+                    'Filter to sessions in this state, e.g. AWAITING_USER_FEEDBACK, COMPLETED, FAILED. Applied client-side across scanned pages.',
+                ),
+            stale_only: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Only sessions that are awaiting user feedback AND produced no code changes — the effectively abandoned ones, with no PR and no diff, waiting on feedback nobody is going to give. Pairs with jules_archive_session. Implies detect_changes.',
                 ),
         },
         async ({
@@ -215,6 +227,8 @@ export function registerSessionTools(
             detect_changes,
             max_pages,
             detect_duplicates: detectDupes,
+            state,
+            stale_only,
         }) => {
             try {
                 // When filtering by source, scan more pages by default so matches
@@ -234,16 +248,33 @@ export function registerSessionTools(
                 } while (token && pagesFetched < cap);
 
                 const needle = source?.toLowerCase();
-                const sessions = needle
+                let sessions = needle
                     ? collected.filter((s) =>
                           s.sourceContext.source.toLowerCase().includes(needle),
                       )
                     : collected;
 
+                // State filtering happens BEFORE change detection so we don't
+                // spend an activities fetch on sessions about to be discarded.
+                // `stale_only` is awaiting-feedback by definition, so it
+                // narrows here too (#36).
+                const wantedState = stale_only
+                    ? 'AWAITING_USER_FEEDBACK'
+                    : state;
+                if (wantedState) {
+                    const target = wantedState.toUpperCase();
+                    sessions = sessions.filter(
+                        (s) => (s.state ?? '').toUpperCase() === target,
+                    );
+                }
+
                 // Optional change detection — one activities fetch per session,
                 // with bounded concurrency to stay friendly to the API.
+                // `stale_only` needs the change data to decide, so it implies
+                // detection regardless of the flag.
+                const needChanges = detect_changes || stale_only;
                 const changeMap = new Map<string, ChangeSummary>();
-                if (detect_changes && sessions.length) {
+                if (needChanges && sessions.length) {
                     const CONCURRENCY = 4;
                     for (let i = 0; i < sessions.length; i += CONCURRENCY) {
                         const slice = sessions.slice(i, i + CONCURRENCY);
@@ -265,6 +296,18 @@ export function registerSessionTools(
                             if (summary) changeMap.set(id, summary);
                         }
                     }
+                }
+
+                // A session that produced no changeset at all is the "no PR,
+                // no diff, waiting on feedback nobody will give" case. A
+                // session whose activities fetch FAILED has no entry either,
+                // so require a summary to exist before calling it changeless —
+                // absence of data is not evidence of absence of changes.
+                if (stale_only) {
+                    sessions = sessions.filter((s) => {
+                        const summary = changeMap.get(s.id);
+                        return summary !== undefined && !summary.hasChanges;
+                    });
                 }
 
                 // Optional duplicate detection

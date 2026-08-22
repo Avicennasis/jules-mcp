@@ -68,6 +68,12 @@ export function registerSourceTools(
                 .describe(
                     'Filter to only repos with suggestions enabled (tracked in LOCAL config — the Jules API does not expose suggestion state, so this is a local record that can go stale). Useful for checking the suggestions quota (5 repos max). Scans the full source list by default; if the scan is truncated the reported quota is explicitly a lower bound, not a count.',
                 ),
+            include_branches: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Include the full branch list for every repo. Off by default: branch counts grow without bound as Jules opens task branches, and the list is usually irrelevant to the question being asked. When off, each repo reports `branchCount` and keeps `defaultBranch`.',
+                ),
         },
         async ({
             page_size,
@@ -75,6 +81,7 @@ export function registerSourceTools(
             filter,
             max_pages,
             suggestions_only,
+            include_branches,
         }) => {
             try {
                 // `suggestions_only` filters the WHOLE source list, so a
@@ -122,12 +129,35 @@ export function registerSourceTools(
                     });
                 }
 
+                // Branch lists dominate the payload and grow without bound as
+                // Jules opens task branches. Measured across the 474 real
+                // connected sources, as this tool actually serializes them:
+                // 513,460 chars with branches against 140,410 without — 72.7%
+                // of the response, for data that is usually irrelevant to the
+                // question. One repo carried 515 branches on its own (#33).
+                let branchesOmitted = 0;
+                if (!include_branches) {
+                    for (const source of filtered) {
+                        const repo = source.githubRepo as
+                            { branches?: unknown[] } | undefined;
+                        if (Array.isArray(repo?.branches)) {
+                            branchesOmitted += repo.branches.length;
+                            (repo as Record<string, unknown>).branchCount =
+                                repo.branches.length;
+                            delete (repo as Record<string, unknown>).branches;
+                        }
+                    }
+                }
+
                 const response: Record<string, unknown> = {
                     status: 'OK',
                     count: filtered.length,
                     pagesFetched: pages,
                     sources: filtered,
                 };
+                if (!include_branches && branchesOmitted > 0) {
+                    response.branchesOmitted = `${branchesOmitted} branches omitted across ${filtered.length} sources — pass include_branches: true for the full lists`;
+                }
                 if (suggestions_only) {
                     Object.assign(
                         response,

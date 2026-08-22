@@ -241,3 +241,80 @@ describe('jules_list_sources suggestions quota', () => {
         expect(out.suggestionsStale).toBe(true);
     });
 });
+
+// #33: branch lists dominate the payload and grow without bound as Jules opens
+// task branches. Measured across 474 real sources: 332,488 bytes with branches
+// against 100,963 without, with one repo carrying 515.
+describe('jules_list_sources branch bloat', () => {
+    const build = () => {
+        const registered = new Map<string, { handler: Function }>();
+        const server = {
+            tool: vi.fn((name: string, _d: string, _s: any, h: Function) => {
+                registered.set(name, { handler: h });
+            }),
+        };
+        const client = {
+            listSources: vi.fn().mockResolvedValue({
+                sources: [
+                    {
+                        name: 'sources/github/Avicennasis/GrantLoft',
+                        id: 'github/Avicennasis/GrantLoft',
+                        githubRepo: {
+                            owner: 'Avicennasis',
+                            repo: 'GrantLoft',
+                            defaultBranch: { displayName: 'main' },
+                            branches: Array.from({ length: 150 }, (_, i) => ({
+                                displayName: `fix/task-${i}`,
+                            })),
+                        },
+                    },
+                ],
+            }),
+        } as unknown as JulesClient;
+        registerSourceTools(server as any, client);
+        return registered;
+    };
+
+    const call = async (args: any) => {
+        const res = await build().get('jules_list_sources')!.handler(args);
+        return {
+            text: res.content[0].text as string,
+            json: JSON.parse(res.content[0].text),
+        };
+    };
+
+    it('omits branch lists by default', async () => {
+        const { json } = await call({});
+        expect(json.sources[0].githubRepo.branches).toBeUndefined();
+    });
+
+    it('reports the branch count instead', async () => {
+        const { json } = await call({});
+        expect(json.sources[0].githubRepo.branchCount).toBe(150);
+    });
+
+    it('keeps defaultBranch, which is the useful part', async () => {
+        const { json } = await call({});
+        expect(json.sources[0].githubRepo.defaultBranch.displayName).toBe(
+            'main',
+        );
+    });
+
+    it('says how much was omitted and how to get it', async () => {
+        const { json } = await call({});
+        expect(json.branchesOmitted).toContain('150');
+        expect(json.branchesOmitted).toContain('include_branches');
+    });
+
+    it('returns the full list when include_branches is set', async () => {
+        const { json } = await call({ include_branches: true });
+        expect(json.sources[0].githubRepo.branches).toHaveLength(150);
+        expect(json.branchesOmitted).toBeUndefined();
+    });
+
+    it('materially shrinks the payload', async () => {
+        const withB = await call({ include_branches: true });
+        const withoutB = await call({});
+        expect(withoutB.text.length).toBeLessThan(withB.text.length / 2);
+    });
+});

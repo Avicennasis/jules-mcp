@@ -475,3 +475,125 @@ describe('jules_list_sessions duplicate rendering', () => {
         expect(text).toContain('overlapping-hunks');
     });
 });
+
+// #36: 37 of one repo's 104 sessions were AWAITING_USER_FEEDBACK, nearly all
+// repeated persona runs annotated "(no changes)" — no PR, no diff, waiting on
+// feedback nobody is going to give. Finding them meant listing everything and
+// reading annotations by hand.
+describe('jules_list_sessions stale_only (#36)', () => {
+    const mk = (id: string, state: string): Session => ({
+        name: `sessions/${id}`,
+        id,
+        prompt: 'p',
+        title: `Session ${id}`,
+        sourceContext: { source: 'sources/github/Avicennasis/GrantLoft' },
+        state: state as Session['state'],
+        createTime: '2026-01-01T00:00:00Z',
+        updateTime: '2026-01-01T00:00:00Z',
+        url: `https://jules.google/sessions/${id}`,
+    });
+
+    // awaiting + no diff (stale), awaiting + real diff (live), completed
+    const SESSIONS = [
+        mk('stale1', 'AWAITING_USER_FEEDBACK'),
+        mk('stale2', 'AWAITING_USER_FEEDBACK'),
+        mk('busy', 'AWAITING_USER_FEEDBACK'),
+        mk('done', 'COMPLETED'),
+    ];
+    const WITH_DIFF = new Set(['busy', 'done']);
+
+    const run = async (args: any, opts?: { failFetchFor?: string }) => {
+        const registered = new Map<string, { handler: Function }>();
+        const server = {
+            tool: vi.fn((name: string, _d: string, _s: any, h: Function) => {
+                registered.set(name, { handler: h });
+            }),
+        };
+        const client = {
+            listSessions: vi.fn().mockResolvedValue({ sessions: SESSIONS }),
+            listActivities: vi.fn(async (id: string) => {
+                if (opts?.failFetchFor === id) throw new Error('transient');
+                return {
+                    activities: WITH_DIFF.has(id)
+                        ? [
+                              {
+                                  name: `sessions/${id}/activities/1`,
+                                  id: '1',
+                                  createTime: '2026-01-01T00:00:00Z',
+                                  originator: 'agent',
+                                  artifacts: [
+                                      {
+                                          changeSet: {
+                                              source: 'sources/github/Avicennasis/GrantLoft',
+                                              gitPatch: {
+                                                  unidiffPatch:
+                                                      'diff --git a/x.ts b/x.ts\n@@ -1,2 +1,3 @@\n+change',
+                                                  baseCommitId: 'abc',
+                                                  suggestedCommitMessage: 'm',
+                                              },
+                                          },
+                                      },
+                                  ],
+                              },
+                          ]
+                        : [],
+                };
+            }),
+        } as unknown as JulesClient;
+        registerSessionTools(server as any, client);
+        const res = await registered
+            .get('jules_list_sessions')!
+            .handler({ compact: true, ...args });
+        return { text: res.content[0].text as string, client };
+    };
+
+    it('returns only awaiting-feedback sessions that produced no changes', async () => {
+        const { text } = await run({ stale_only: true });
+        expect(text).toContain('stale1');
+        expect(text).toContain('stale2');
+        expect(text).not.toContain('busy');
+        expect(text).not.toContain('done');
+    });
+
+    it('implies detect_changes without the caller passing it', async () => {
+        const { client } = await run({ stale_only: true });
+        expect(client.listActivities).toHaveBeenCalled();
+    });
+
+    it('does not fetch activities for sessions already excluded by state', async () => {
+        // State narrowing happens first, so COMPLETED costs no API call.
+        const { client } = await run({ stale_only: true });
+        const ids = (client.listActivities as any).mock.calls.map(
+            (c: any[]) => c[0],
+        );
+        expect(ids).not.toContain('done');
+    });
+
+    it('excludes a session whose activities fetch failed', async () => {
+        // No change data is not evidence of no changes.
+        const { text } = await run(
+            { stale_only: true },
+            {
+                failFetchFor: 'stale1',
+            },
+        );
+        expect(text).not.toContain('stale1');
+        expect(text).toContain('stale2');
+    });
+
+    it('state filter works on its own', async () => {
+        const { text } = await run({ state: 'COMPLETED' });
+        expect(text).toContain('done');
+        expect(text).not.toContain('stale1');
+    });
+
+    it('state filter is case-insensitive', async () => {
+        const { text } = await run({ state: 'completed' });
+        expect(text).toContain('done');
+    });
+
+    it('returns everything when neither filter is set', async () => {
+        const { text } = await run({});
+        for (const s of SESSIONS) expect(text).toContain(s.id);
+    });
+});
