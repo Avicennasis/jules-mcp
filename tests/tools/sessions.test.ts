@@ -88,6 +88,39 @@ describe('session tools', () => {
         expect(mockClient.createSession).not.toHaveBeenCalled();
     });
 
+    it('jules_create_session prepends standing guidance to the prompt', async () => {
+        const handler = registeredTools.get('jules_create_session')!.handler;
+        const result = await handler({
+            prompt: 'fix bug',
+            source: 'sources/github/o/r',
+            starting_branch: 'main',
+            reason: 'testing',
+            dry_run: true,
+        });
+        const sent = JSON.parse(result.content[0].text).would_request.body
+            .prompt;
+        expect(sent).toContain('fix bug');
+        expect(sent).toContain('commented-out code');
+        expect(sent.indexOf('commented-out code')).toBeLessThan(
+            sent.indexOf('fix bug'),
+        );
+    });
+
+    it('jules_create_session sends the bare prompt when guidance is opted out', async () => {
+        const handler = registeredTools.get('jules_create_session')!.handler;
+        const result = await handler({
+            prompt: 'fix bug',
+            source: 'sources/github/o/r',
+            starting_branch: 'main',
+            reason: 'testing',
+            include_guidance: false,
+            dry_run: true,
+        });
+        const sent = JSON.parse(result.content[0].text).would_request.body
+            .prompt;
+        expect(sent).toBe('fix bug');
+    });
+
     it('jules_create_session calls client and emits audit', async () => {
         const { emitAudit } = await import('../../src/audit.js');
         const handler = registeredTools.get('jules_create_session')!.handler;

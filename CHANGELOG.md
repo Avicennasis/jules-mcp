@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Comment-only change detection: `jules_get_session_diff` now emits a
+  `[comment-only]` review warning naming any file whose entire diff is
+  comments. Such changes cannot fail a test or break CI, so they are invisible
+  to every automated signal — this flags them for a human read. It is a review
+  prompt, not a gate (#37).
+- Standing guidance on `jules_create_session`: house rules on comment
+  preservation and on declining tasks whose premise is wrong are prepended to
+  the prompt by default. The text lives in `guidance.md` under the config dir
+  (`~/.local/share/jules-mcp/`) and falls back to a built-in default, so it can
+  be edited without a release. Opt out per call with `include_guidance: false`.
+  Note this reaches only tasks created through this server — Jules' own
+  auto-generated suggestion tasks are created upstream and never pass through
+  here (#38).
+
 ### Changed
 
 - `jules_run_task` parallel mode now polls all N sessions to completion

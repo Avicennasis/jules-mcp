@@ -13,6 +13,7 @@ import {
     type ChangeSummary,
 } from '../formatters.js';
 import { JulesAPIError, JulesStateError } from '../errors.js';
+import { loadGuidance, applyGuidance } from '../guidance.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -63,6 +64,12 @@ export function registerSessionTools(
             reason: z
                 .string()
                 .describe('Why this task is being created (for audit log)'),
+            include_guidance: z
+                .boolean()
+                .default(true)
+                .describe(
+                    'Prepend standing house guidance (comment preservation, declining tasks with a wrong premise) to the prompt. Default true. Set false for prompts that are already self-contained.',
+                ),
             dry_run: z
                 .boolean()
                 .default(false)
@@ -76,11 +83,18 @@ export function registerSessionTools(
             require_plan_approval,
             automation_mode,
             reason,
+            include_guidance,
             dry_run,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
             const body = {
-                prompt,
+                // Treat undefined as opt-in rather than leaning on the zod
+                // default: callers that bypass schema parsing must still get
+                // the guidance, so only an explicit `false` turns it off.
+                prompt:
+                    include_guidance === false
+                        ? prompt
+                        : applyGuidance(prompt, loadGuidance()),
                 sourceContext: {
                     source: normalizedSource,
                     githubRepoContext: { startingBranch: starting_branch },

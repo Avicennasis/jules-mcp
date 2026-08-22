@@ -17,6 +17,7 @@ import {
     summarizeSessionDiff,
     extractPatch,
     detectDuplicates,
+    detectCommentOnlyChanges,
 } from '../src/formatters.js';
 import type { ChangeSummary } from '../src/formatters.js';
 import type { Session, Activity, Plan } from '../src/types.js';
@@ -1134,5 +1135,97 @@ describe('extractPatch journal file filtering', () => {
         expect(result).not.toBeNull();
         expect(result!.patch).toContain('+journal bulk');
         expect(result!.excludedJournalFiles).toBeUndefined();
+    });
+});
+
+describe('detectCommentOnlyChanges', () => {
+    // Real diff from Avicennasis/GrantLoft#310, which deleted the rationale for
+    // a race-condition mitigation and left only the bare header. Green CI, no
+    // code change — invisible to every signal except reading the diff.
+    const commentDeletion = `diff --git a/public_html/app/api/grants/route.ts b/public_html/app/api/grants/route.ts
+index b18bb97..8dea3b7 100644
+--- a/public_html/app/api/grants/route.ts
++++ b/public_html/app/api/grants/route.ts
+@@ -130,13 +130,6 @@ export async function POST(request: NextRequest) {
+     }
+
+     // RACE CONDITION MITIGATION: Re-check the active grant count after insert.
+-    // Two concurrent POSTs can both pass the pre-insert canCreateGrant check
+-    // before either insert completes. If we're now OVER the limit (not at-limit —
+-    // at-limit is the legitimate last-slot fill), roll back.
+-    //
+-    // NOTE: We cannot reuse canCreateGrant() here because it uses >= (correct
+-    // for pre-insert gating). Post-insert, usage == limit is the expected state
+-    // after filling the last slot. Only usage > limit means a race occurred.
+     try {
+       const postUsage = await getEntitlementUsage(profile.org_id)
+`;
+
+    it('flags a diff whose every changed line is a comment', () => {
+        const warnings = detectCommentOnlyChanges(commentDeletion);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].type).toBe('comment-only');
+        expect(warnings[0].message).toContain(
+            'public_html/app/api/grants/route.ts',
+        );
+    });
+
+    it('does not flag a diff that changes code', () => {
+        const codeChange = `diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,3 +1,3 @@
+     // keep the retry bounded
+-    const retries = 3
++    const retries = 5
+`;
+        expect(detectCommentOnlyChanges(codeChange)).toEqual([]);
+    });
+
+    it('recognises # and block-comment styles, not just //', () => {
+        const pyAndBlock = `diff --git a/deploy.py b/deploy.py
+--- a/deploy.py
++++ b/deploy.py
+@@ -1,2 +1,2 @@
+-# fail closed: we cannot verify the token here
++# fail closed
+ token = read()
+diff --git a/src/lib.ts b/src/lib.ts
+--- a/src/lib.ts
++++ b/src/lib.ts
+@@ -1,3 +1,3 @@
+-/* M2: non-fatal, the update surfaces real DB errors */
++/* M2: non-fatal */
+ export const x = 1
+`;
+        const warnings = detectCommentOnlyChanges(pyAndBlock);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].message).toContain('deploy.py');
+        expect(warnings[0].message).toContain('src/lib.ts');
+    });
+
+    it('flags only the comment-only file in a mixed changeset', () => {
+        const mixed = `diff --git a/src/only-comments.ts b/src/only-comments.ts
+--- a/src/only-comments.ts
++++ b/src/only-comments.ts
+@@ -1,2 +1,2 @@
+-// old note
++// new note
+ const a = 1
+diff --git a/src/real-code.ts b/src/real-code.ts
+--- a/src/real-code.ts
++++ b/src/real-code.ts
+@@ -1,2 +1,2 @@
+-const b = 1
++const b = 2
+`;
+        const warnings = detectCommentOnlyChanges(mixed);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].message).toContain('src/only-comments.ts');
+        expect(warnings[0].message).not.toContain('src/real-code.ts');
+    });
+
+    it('returns nothing for an empty diff', () => {
+        expect(detectCommentOnlyChanges('')).toEqual([]);
     });
 });

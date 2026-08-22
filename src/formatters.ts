@@ -437,6 +437,58 @@ export function detectTestFrameworkConflicts(diff: string): DiffWarning[] {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Comment-only change detection (#37)
+// ────────────────────────────────────────────────────────────────────────────
+
+const COMMENT_PREFIXES = ['//', '/*', '*/', '*', '#', '<!--', '-->', '--'];
+
+function isCommentLine(body: string): boolean {
+    const t = body.trim();
+    if (t === '') return true;
+    return COMMENT_PREFIXES.some((p) => t.startsWith(p));
+}
+
+/**
+ * Scan a unified diff for files whose every added/removed line is a comment.
+ *
+ * A comment-only change cannot fail a test and cannot break CI, so it is
+ * invisible to every automated signal — the only way to catch a bad one is to
+ * read the diff. This flags them for review; it is deliberately not a gate.
+ */
+export function detectCommentOnlyChanges(diff: string): DiffWarning[] {
+    const perFile = new Map<string, { changed: number; comments: number }>();
+    let file: string | undefined;
+
+    for (const line of diff.split('\n')) {
+        const header = /^diff --git a\/(\S+)/.exec(line);
+        if (header) {
+            file = header[1];
+            continue;
+        }
+        if (!file) continue;
+        if (line.startsWith('+++') || line.startsWith('---')) continue;
+        if (!line.startsWith('+') && !line.startsWith('-')) continue;
+
+        const stats = perFile.get(file) ?? { changed: 0, comments: 0 };
+        stats.changed += 1;
+        if (isCommentLine(line.slice(1))) stats.comments += 1;
+        perFile.set(file, stats);
+    }
+
+    const flagged = [...perFile.entries()]
+        .filter(([, s]) => s.changed > 0 && s.changed === s.comments)
+        .map(([f]) => f);
+
+    if (flagged.length === 0) return [];
+    return [
+        {
+            type: 'comment-only',
+            message: `Changes to ${flagged.join(', ')} are comments only — no code changed. Verify the comment is not load-bearing documentation before merging.`,
+        },
+    ];
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Quality signals (#47590)
 // ────────────────────────────────────────────────────────────────────────────
 
