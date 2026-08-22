@@ -8,6 +8,7 @@ import {
     suggestBranchName,
     extractReviewContext,
     detectTestFrameworkConflicts,
+    detectCommentOnlyChanges,
     extractQualitySignals,
 } from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
@@ -84,7 +85,10 @@ export function registerDiffTools(
                     session,
                     activities,
                 );
-                const warnings = detectTestFrameworkConflicts(rawDiff);
+                const warnings = [
+                    ...detectTestFrameworkConflicts(rawDiff),
+                    ...detectCommentOnlyChanges(rawDiff),
+                ];
                 const signals = extractQualitySignals(proseTexts);
                 if (warnings.length > 0 || signals.length > 0) {
                     const items: string[] = [];

@@ -80,6 +80,46 @@ describe('diff tools', () => {
         expect(result.content[0].text).toContain('commit msg');
     });
 
+    it('surfaces a comment-only warning in the review warnings', async () => {
+        mockClient.listActivities = vi.fn().mockResolvedValue({
+            activities: [
+                {
+                    name: 's/abc/activities/1',
+                    id: '1',
+                    createTime: 't',
+                    originator: 'agent',
+                    sessionCompleted: {},
+                    artifacts: [
+                        {
+                            changeSet: {
+                                source: 'sources/github/o/r',
+                                gitPatch: {
+                                    unidiffPatch: [
+                                        'diff --git a/src/pay.ts b/src/pay.ts',
+                                        '--- a/src/pay.ts',
+                                        '+++ b/src/pay.ts',
+                                        '@@ -1,3 +1,2 @@',
+                                        '-// fail closed: we cannot verify the subscription here',
+                                        ' const ok = check()',
+                                    ].join('\n'),
+                                    baseCommitId: 'b',
+                                    suggestedCommitMessage: 'tidy comment',
+                                },
+                            },
+                        },
+                    ],
+                },
+            ],
+        });
+
+        const handler = registeredTools.get('jules_get_session_diff')!.handler;
+        const result = await handler({ session_id: 'abc' });
+        const text = result.content[0].text;
+        expect(text).toContain('Review warnings');
+        expect(text).toContain('[comment-only]');
+        expect(text).toContain('src/pay.ts');
+    });
+
     it('returns a files-and-counts summary when summary=true (no raw hunks)', async () => {
         const handler = registeredTools.get('jules_get_session_diff')!.handler;
         const result = await handler({ session_id: 'abc', summary: true });
