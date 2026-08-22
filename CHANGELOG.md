@@ -69,6 +69,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caps it at `COMPACT_TITLE_MAX_CHARS` (120), marking a truncated title with an
   ellipsis. Measured on the 104 real GrantLoft sessions: **1,122 lines → 104**
   (one per session), 47,213 → 11,490 characters (#32).
+- `jules_list_sources` with `suggestions_only` printed a definitive
+  `suggestionsQuota` derived from a scan that could stop early, so the same
+  question returned "2/5 slots used" or "4/5 slots used" depending on how many
+  pages happened to be scanned. `suggestions_only` filters the whole source
+  list, so it now scans to exhaustion by default (up to the 20-page cap); an
+  explicit `max_pages` is still honoured, but any truncated scan now renders as
+  `at least N of 5 slots used — SCAN INCOMPLETE …` and sets
+  `suggestionsScanComplete: false`, so a lower bound can no longer be read as a
+  count. Reproduced against the live account: 474 sources over 5 pages, with
+  suggestions-enabled repos on pages 1 and 4 (#31).
+- `suggestionsEnabled` is local bookkeeping that was presented as though it
+  were live Jules state. Confirmed against the API across all 474 sources: a
+  source carries only `name`, `id` and `githubRepo` — suggestion state is not
+  exposed anywhere, so it cannot be reconciled. Every tool that reports the
+  quota now labels it as local, names the file it came from, and publishes the
+  age of the oldest record (`suggestionsOldestRecord`,
+  `suggestionsRecordAgeDays`, `suggestionsStale` past 30 days) (#35).
 
 ### Security
 

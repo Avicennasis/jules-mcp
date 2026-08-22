@@ -111,12 +111,12 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Sources
 
-| Tool                        | Description                                                                                                          | Key params                                                                          |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `jules_list_sources`        | List connected GitHub repos. Supports auto-pagination and AIP-160 filtering. Annotates with local config if present. | `page_size?`, `page_token?`, `filter?` (AIP-160), `max_pages?` (default 10, max 20) |
-| `jules_get_source`          | Get details for one source. Annotates with local config if present.                                                  | `source`                                                                            |
-| `jules_configure_source` ✎  | Set local metadata the API doesn't expose (e.g. suggestions enabled). Stored on disk and annotated onto responses.   | `source`, `suggestions_enabled?`, `notes?`                                          |
-| `jules_list_source_configs` | List all locally-stored source configurations.                                                                       | —                                                                                   |
+| Tool                        | Description                                                                                                          | Key params                                                                                                                                |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_list_sources`        | List connected GitHub repos. Supports auto-pagination and AIP-160 filtering. Annotates with local config if present. | `page_size?`, `page_token?`, `filter?` (AIP-160), `max_pages?` (default 10, max 20), `suggestions_only?` (scans the full list; see below) |
+| `jules_get_source`          | Get details for one source. Annotates with local config if present.                                                  | `source`                                                                                                                                  |
+| `jules_configure_source` ✎  | Set local metadata the API doesn't expose (e.g. suggestions enabled). Stored on disk and annotated onto responses.   | `source`, `suggestions_enabled?`, `notes?`                                                                                                |
+| `jules_list_source_configs` | List all locally-stored source configurations.                                                                       | —                                                                                                                                         |
 
 ### Sessions
 
@@ -179,6 +179,8 @@ Or skip the babysitting with **`jules_run_task`**, which does create → approve
 > **Heads-up:** `session.outputs` is frequently empty even when Jules made changes. The actual diffs live in **activity artifacts** (`changeSet.gitPatch.unidiffPatch`).
 
 `jules_get_session_diff` handles this for you — it walks the activities, picks the **last** (cumulative) changeset, strips binary patch blobs, and returns the plan + final diff in one readable block. Use it before approving a plan or opening a PR yourself. For a large changeset, pass `summary=true` to get just the list of changed files with `+/-` line counts instead of the full diff.
+
+**The suggestions quota is local, not live.** Jules allows its "suggestions" feature on at most 5 repos, but the API does not expose which repos have it enabled — confirmed across all 474 connected sources, where each carries only `name`, `id` and `githubRepo`. `jules_configure_source` records it locally instead, so `suggestionsQuota` reflects what was last written there and can drift from reality if suggestions are toggled in the Jules web UI. Every response that reports the quota therefore names it as local and publishes the age of the oldest record, flagging it stale past 30 days. `suggestions_only` scans the whole source list by default; if a scan is truncated the quota renders as `at least N of 5 … SCAN INCOMPLETE` rather than an exact count, because a truncating filter cannot prove absence.
 
 **Finding the sessions for one repo:** `jules_list_sessions` returns _all_ sessions across every connected repo, which can be a lot. Pass `source` to filter to one repo (it scans up to 10 pages by default to gather matches), `compact: true` for a one-line-per-session listing, and `detect_changes: true` to mark which sessions actually produced code vs. a plan only — e.g. `jules_list_sessions(source: "bfr-shift-dashboard", compact: true, detect_changes: true)`.
 

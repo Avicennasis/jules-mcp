@@ -2,7 +2,11 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
 import type { SourceConfigStore } from '../source-config.js';
+import { describeSuggestionsQuota } from '../source-config.js';
 import { JulesAPIError } from '../errors.js';
+
+/** Hard ceiling on auto-followed pages, regardless of what the caller asks. */
+const MAX_PAGE_CAP = 20;
 
 function errorResponse(error: unknown) {
     return {
@@ -56,13 +60,13 @@ export function registerSourceTools(
                 .number()
                 .optional()
                 .describe(
-                    'Auto-follow pagination up to this many pages (default 10, max 20). Set to 1 for a single page.',
+                    'Auto-follow pagination up to this many pages (default 10, max 20; default is the 20-page cap when suggestions_only is set, since that filter needs the whole list). Set to 1 for a single page.',
                 ),
             suggestions_only: z
                 .boolean()
                 .default(false)
                 .describe(
-                    'Filter to only repos with suggestions enabled (tracked in local config). Useful for checking the suggestions quota (5 repos max).',
+                    'Filter to only repos with suggestions enabled (tracked in LOCAL config — the Jules API does not expose suggestion state, so this is a local record that can go stale). Useful for checking the suggestions quota (5 repos max). Scans the full source list by default; if the scan is truncated the reported quota is explicitly a lower bound, not a count.',
                 ),
         },
         async ({
@@ -73,7 +77,13 @@ export function registerSourceTools(
             suggestions_only,
         }) => {
             try {
-                const limit = Math.min(max_pages ?? 10, 20);
+                // `suggestions_only` filters the WHOLE source list, so a
+                // partial scan cannot answer it — stopping early only
+                // establishes "no matches in the pages I happened to scan".
+                // Default it to the hard cap rather than 10 (#31).
+                const limit = suggestions_only
+                    ? Math.min(max_pages ?? MAX_PAGE_CAP, MAX_PAGE_CAP)
+                    : Math.min(max_pages ?? 10, MAX_PAGE_CAP);
                 const allSources: Record<string, unknown>[] = [];
                 let token = page_token;
                 let pages = 0;
@@ -119,7 +129,23 @@ export function registerSourceTools(
                     sources: filtered,
                 };
                 if (suggestions_only) {
-                    response.suggestionsQuota = `${filtered.length}/5 slots used`;
+                    Object.assign(
+                        response,
+                        describeSuggestionsQuota({
+                            matched: filtered.length,
+                            // A leftover token means the list was not
+                            // exhausted, so the count is a lower bound.
+                            scanComplete: !token,
+                            pagesFetched: pages,
+                            updatedAt: filtered.map(
+                                (s) =>
+                                    (
+                                        s.localConfig as
+                                            { updatedAt?: string } | undefined
+                                    )?.updatedAt,
+                            ),
+                        }),
+                    );
                 }
                 if (token) {
                     response.nextPageToken = token;
@@ -271,7 +297,18 @@ export function registerSourceTools(
                                 {
                                     status: 'OK',
                                     count: configs.length,
-                                    suggestionsQuota: `${suggestionsEnabled.length}/5 slots used`,
+                                    // This tool reads the local store directly
+                                    // rather than scanning the API, so the scan
+                                    // is complete by construction — but the
+                                    // staleness caveat applies just the same
+                                    // (#35).
+                                    ...describeSuggestionsQuota({
+                                        matched: suggestionsEnabled.length,
+                                        scanComplete: true,
+                                        updatedAt: suggestionsEnabled.map(
+                                            (c) => c.config.updatedAt,
+                                        ),
+                                    }),
                                     suggestionsRepos: suggestionsEnabled.map(
                                         (c) => c.sourceId,
                                     ),

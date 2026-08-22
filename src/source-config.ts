@@ -19,6 +19,82 @@ export interface SourceConfig {
     updatedAt: string;
 }
 
+/** Jules allows the suggestions feature on at most this many repos. */
+export const SUGGESTIONS_QUOTA_LIMIT = 5;
+
+/** Local suggestion records older than this are called out as possibly stale. */
+export const SUGGESTIONS_STALE_AFTER_DAYS = 30;
+
+export interface SuggestionsQuotaReport {
+    suggestionsQuota: string;
+    suggestionsScanComplete: boolean;
+    suggestionsStateSource: string;
+    suggestionsOldestRecord?: string;
+    suggestionsRecordAgeDays?: number;
+    suggestionsStale?: boolean;
+}
+
+/**
+ * Render the suggestions quota with its provenance attached.
+ *
+ * Two separate defects converge on this one string, so it is built in one
+ * place and used by every tool that emits it:
+ *
+ * - #31: the quota was printed as definitive even when derived from a scan
+ *   that stopped early. `suggestions_only` is a filter over the *whole* source
+ *   list, so a partial scan has only established "no matches in the pages I
+ *   happened to look at". An incomplete scan can never render as an exact
+ *   count — it says "at least N" and names itself incomplete.
+ * - #35: `suggestionsEnabled` is local bookkeeping that Jules never confirms.
+ *   Verified against the live API across 474 sources: a source carries only
+ *   `name`, `id` and `githubRepo`, with no suggestion state anywhere. So it
+ *   cannot be reconciled, and the honest move is to label it as local and
+ *   publish its age rather than let a reader take it as live state.
+ */
+export function describeSuggestionsQuota(input: {
+    matched: number;
+    scanComplete: boolean;
+    pagesFetched?: number;
+    updatedAt?: (string | undefined)[];
+    now?: Date;
+}): SuggestionsQuotaReport {
+    const { matched, scanComplete, pagesFetched, updatedAt = [] } = input;
+    const now = input.now ?? new Date();
+
+    const stamps = updatedAt
+        .filter((s): s is string => typeof s === 'string' && s !== '')
+        .map((s) => ({ raw: s, ms: Date.parse(s) }))
+        .filter((s) => Number.isFinite(s.ms))
+        .sort((a, b) => a.ms - b.ms);
+    const oldest = stamps[0];
+    const ageDays = oldest
+        ? Math.floor((now.getTime() - oldest.ms) / 86_400_000)
+        : undefined;
+
+    const provenance = oldest
+        ? ` (from local config, oldest record ${oldest.raw.slice(0, 10)} — ${ageDays} days ago)`
+        : ' (from local config)';
+
+    const quota = scanComplete
+        ? `${matched}/${SUGGESTIONS_QUOTA_LIMIT} slots used${provenance}`
+        : `at least ${matched} of ${SUGGESTIONS_QUOTA_LIMIT} slots used — SCAN INCOMPLETE` +
+          (pagesFetched ? ` after ${pagesFetched} pages` : '') +
+          `, more sources remain unscanned so this is a lower bound, not a count${provenance}`;
+
+    const report: SuggestionsQuotaReport = {
+        suggestionsQuota: quota,
+        suggestionsScanComplete: scanComplete,
+        suggestionsStateSource:
+            'local config (~/.local/share/jules-mcp/source-config.json) — the Jules API does not expose suggestion state, so this reflects what was last recorded via jules_configure_source and is not confirmed against Jules',
+    };
+    if (oldest) {
+        report.suggestionsOldestRecord = oldest.raw;
+        report.suggestionsRecordAgeDays = ageDays;
+        report.suggestionsStale = (ageDays ?? 0) > SUGGESTIONS_STALE_AFTER_DAYS;
+    }
+    return report;
+}
+
 export class SourceConfigStore {
     private readonly filePath: string;
     private configs: Record<string, SourceConfig> = {};
