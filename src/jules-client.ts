@@ -71,7 +71,16 @@ export class JulesClient {
             return undefined as T;
         }
 
-        return (await response.json()) as T;
+        // `:sendMessage` also returns google.protobuf.Empty, and a completely
+        // empty body is not parseable JSON. Parsing it threw AFTER the request
+        // had already succeeded, which surfaced to callers as a failed call for
+        // an action that actually happened (#30). Treat an empty body as an
+        // empty result rather than an error.
+        const text = await response.text();
+        if (text.trim() === '') {
+            return undefined as T;
+        }
+        return JSON.parse(text) as T;
     }
 
     private async handleError(
@@ -171,13 +180,25 @@ export class JulesClient {
         return this.request<Session>(`/${name}:approvePlan`, 'POST', {});
     }
 
-    async sendMessage(sessionId: string, message: string): Promise<Session> {
+    /**
+     * Send a message to a session.
+     *
+     * Returns `undefined` (or a payload without session fields) on success —
+     * the endpoint returns google.protobuf.Empty, so callers must NOT assume a
+     * populated Session comes back. Re-read the session if you need its state.
+     */
+    async sendMessage(
+        sessionId: string,
+        message: string,
+    ): Promise<Session | undefined> {
         const name = normalizeResourceName(sessionId, 'sessions');
         // The Jules API expects the text under "prompt" (same field as session
         // creation), not "message".
-        return this.request<Session>(`/${name}:sendMessage`, 'POST', {
-            prompt: message,
-        });
+        return this.request<Session | undefined>(
+            `/${name}:sendMessage`,
+            'POST',
+            { prompt: message },
+        );
     }
 
     async archiveSession(sessionId: string): Promise<Session> {

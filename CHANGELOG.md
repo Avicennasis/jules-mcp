@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `new JulesClient(key, { requestTimeoutMs })` or per call; default remains
   30s (#47977).
 
+### Fixed
+
+- `jules_send_message` failed on every call with
+  `TypeError: Cannot read properties of undefined (reading 'source')` (500).
+  The `:sendMessage` endpoint returns `google.protobuf.Empty`, so the response
+  carries no session fields, but the handler read `session.sourceContext.source`
+  for its audit entry. The throw happened **after** the POST had already
+  succeeded, so a delivered message was reported to the caller as a hard
+  failure — inviting a duplicate retry. `JulesClient.request` now treats an
+  empty response body as an empty result instead of a JSON parse error,
+  `sendMessage` returns `Session | undefined` to make the empty payload
+  explicit in the type, and the tool re-reads the session for real state. If
+  that re-read fails the tool still reports success, because the message was
+  delivered (#30).
+
 ### Security
 
 - Audit payloads are passed to `inkwell-emit` via stdin (`--payload -`)
