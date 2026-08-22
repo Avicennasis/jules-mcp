@@ -50,11 +50,23 @@ export function formatPlan(plan: Plan): string {
     return `${header}\n${steps}`;
 }
 
+/** An inclusive line range in the post-image of a file. */
+export interface HunkRange {
+    start: number;
+    end: number;
+}
+
 /** Per-file insertion/deletion tally parsed from a unified diff. */
 export interface FileChange {
     file: string;
     insertions: number;
     deletions: number;
+    /**
+     * Post-image line ranges touched in this file, from the `@@` headers.
+     * Two sessions editing one file in different functions share a path but
+     * no range, which is the distinction #34 turned on.
+     */
+    hunks?: HunkRange[];
 }
 
 /** Lightweight summary of a session's final changeset, derived from activities. */
@@ -122,6 +134,7 @@ export function summarizeChangeset(
                     file: filePath,
                     insertions: 0,
                     deletions: 0,
+                    hunks: [],
                 };
                 if (!skippingLockfile && !skippingJournal) {
                     files.push(current);
@@ -130,6 +143,21 @@ export function summarizeChangeset(
                 continue;
             }
             if (skippingLockfile || skippingJournal) continue;
+            // Capture the post-image range of each hunk so callers can tell
+            // "same file" from "same region of that file" (#34).
+            if (line.startsWith('@@')) {
+                const m = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+                if (m && current) {
+                    const start = Number(m[1]);
+                    const count = m[2] === undefined ? 1 : Number(m[2]);
+                    current.hunks ??= [];
+                    current.hunks.push({
+                        start,
+                        end: start + Math.max(count, 1) - 1,
+                    });
+                }
+                continue;
+            }
             if (line.startsWith('GIT binary patch')) {
                 inBinary = true;
                 continue;
@@ -652,11 +680,52 @@ function wordOverlap(a: string, b: string): number {
  * Find duplicate session pairs: same source + similar normalized title.
  * Returns a map from session ID to array of duplicate session IDs.
  */
+/**
+ * How strong the duplicate claim is, strongest first.
+ *
+ * - `overlapping-hunks` — the two sessions edit the same lines. They really do
+ *   collide.
+ * - `same-file` — same file, but the diffs are in different regions of it.
+ *   Frequently complementary work rather than duplication.
+ * - `similar-title` — titles alone. This is what clusters repeated persona
+ *   runs that produced no diff at all, so it stays, but it is the weakest
+ *   claim available.
+ */
+export type DuplicateStrength =
+    'overlapping-hunks' | 'same-file' | 'similar-title';
+
+export interface DuplicateMatch {
+    id: string;
+    strength: DuplicateStrength;
+}
+
+/** True when two sets of post-image line ranges intersect. */
+function hunksIntersect(a: HunkRange[], b: HunkRange[]): boolean {
+    return a.some((ra) =>
+        b.some((rb) => ra.start <= rb.end && rb.start <= ra.end),
+    );
+}
+
+/**
+ * Flag sessions that may be redundant, annotating HOW strong each claim is.
+ *
+ * The feature is deliberately not narrowed: it correctly clusters large runs
+ * of repeated persona sessions, which is its main value. What it lacked was
+ * precision — two sessions editing different functions of one file were
+ * reported identically to two sessions editing the same lines, so acting on
+ * the flag without reading both diffs could close legitimate work (#34).
+ * Callers now get the strength alongside the id and can decide accordingly.
+ */
 export function detectDuplicates(
     sessions: Session[],
     changeMap?: Map<string, ChangeSummary>,
-): Map<string, string[]> {
-    const dupes = new Map<string, string[]>();
+): Map<string, DuplicateMatch[]> {
+    const dupes = new Map<string, DuplicateMatch[]>();
+
+    const record = (from: string, to: string, strength: DuplicateStrength) => {
+        if (!dupes.has(from)) dupes.set(from, []);
+        dupes.get(from)!.push({ id: to, strength });
+    };
 
     for (let i = 0; i < sessions.length; i++) {
         for (let j = i + 1; j < sessions.length; j++) {
@@ -673,31 +742,49 @@ export function detectDuplicates(
                 titleB.includes(titleA) ||
                 wordOverlap(titleA, titleB) > 0.6;
 
-            // File-path overlap: if both sessions have change data,
-            // check whether they modified overlapping files.
-            let fileOverlap = false;
-            if (changeMap && !similar) {
-                const filesA = changeMap.get(a.id)?.files.map((f) => f.file);
-                const filesB = changeMap.get(b.id)?.files.map((f) => f.file);
-                if (filesA?.length && filesB?.length) {
-                    const setA = new Set(filesA);
-                    const shared = filesB.filter((f) => setA.has(f));
-                    // Flag as duplicate if any non-trivial file overlap exists.
-                    // Ignore if the only shared file is a journal/config file.
-                    const meaningful = shared.filter(
-                        (f) =>
-                            !f.startsWith('.jules/') &&
-                            !f.startsWith('.Jules/'),
-                    );
-                    fileOverlap = meaningful.length > 0;
+            // Which files do they share, and do the edits actually collide?
+            const sharedFiles: string[] = [];
+            let collides = false;
+            if (changeMap) {
+                const changesA = changeMap.get(a.id)?.files;
+                const changesB = changeMap.get(b.id)?.files;
+                if (changesA?.length && changesB?.length) {
+                    const byPathB = new Map(changesB.map((f) => [f.file, f]));
+                    for (const fa of changesA) {
+                        // A shared .jules/ journal file is bookkeeping, not
+                        // evidence that two sessions did the same work.
+                        if (
+                            fa.file.startsWith('.jules/') ||
+                            fa.file.startsWith('.Jules/')
+                        ) {
+                            continue;
+                        }
+                        const fb = byPathB.get(fa.file);
+                        if (!fb) continue;
+                        sharedFiles.push(fa.file);
+                        if (
+                            fa.hunks?.length &&
+                            fb.hunks?.length &&
+                            hunksIntersect(fa.hunks, fb.hunks)
+                        ) {
+                            collides = true;
+                        }
+                    }
                 }
             }
 
-            if (similar || fileOverlap) {
-                if (!dupes.has(a.id)) dupes.set(a.id, []);
-                if (!dupes.has(b.id)) dupes.set(b.id, []);
-                dupes.get(a.id)!.push(b.id);
-                dupes.get(b.id)!.push(a.id);
+            let strength: DuplicateStrength | undefined;
+            if (sharedFiles.length) {
+                // Hunk ranges are only decisive when we have them for both
+                // sides; without them, a shared path is all we can claim.
+                strength = collides ? 'overlapping-hunks' : 'same-file';
+            } else if (similar) {
+                strength = 'similar-title';
+            }
+
+            if (strength) {
+                record(a.id, b.id, strength);
+                record(b.id, a.id, strength);
             }
         }
     }

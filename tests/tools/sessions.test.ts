@@ -386,3 +386,92 @@ describe('session tools', () => {
         });
     });
 });
+
+// #34: the strength label only helps if it survives into the rendered output.
+// TypeScript cannot catch this half — `[{id, strength}].join(', ')` typechecks
+// perfectly and renders "[object Object]" — so it is asserted on the string.
+describe('jules_list_sessions duplicate rendering', () => {
+    const sessionAt = (id: string, title: string): Session => ({
+        name: `sessions/${id}`,
+        id,
+        prompt: 'p',
+        title,
+        sourceContext: { source: 'sources/github/Avicennasis/GrantLoft' },
+        state: 'COMPLETED',
+        createTime: '2026-01-01T00:00:00Z',
+        updateTime: '2026-01-01T00:00:00Z',
+        url: `https://jules.google/sessions/${id}`,
+    });
+
+    const patchAt = (start: number) =>
+        [
+            'diff --git a/public_html/lib/access-state.ts b/public_html/lib/access-state.ts',
+            '--- a/public_html/lib/access-state.ts',
+            '+++ b/public_html/lib/access-state.ts',
+            `@@ -${start},6 +${start},8 @@`,
+            '+  changed line',
+        ].join('\n');
+
+    const run = async (startA: number, startB: number) => {
+        const registered = new Map<string, { handler: Function }>();
+        const server = {
+            tool: vi.fn((name: string, _d: string, _s: any, h: Function) => {
+                registered.set(name, { handler: h });
+            }),
+        };
+        const sessions = [
+            sessionAt('pr316', 'Fix access state handling'),
+            sessionAt('pr320', 'Fix access state checking'),
+        ];
+        const client = {
+            listSessions: vi.fn().mockResolvedValue({ sessions }),
+            listActivities: vi.fn(async (id: string) => ({
+                activities: [
+                    {
+                        name: `sessions/${id}/activities/1`,
+                        id: '1',
+                        createTime: '2026-01-01T00:00:00Z',
+                        originator: 'agent',
+                        artifacts: [
+                            {
+                                changeSet: {
+                                    source: 'sources/github/Avicennasis/GrantLoft',
+                                    gitPatch: {
+                                        unidiffPatch: patchAt(
+                                            id === 'pr316' ? startA : startB,
+                                        ),
+                                        baseCommitId: 'abc',
+                                        suggestedCommitMessage: 'm',
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            })),
+        } as unknown as JulesClient;
+        registerSessionTools(server as any, client);
+        const res = await registered.get('jules_list_sessions')!.handler({
+            compact: true,
+            detect_changes: true,
+            detect_duplicates: true,
+        });
+        return res.content[0].text as string;
+    };
+
+    it('never renders raw objects into the output', async () => {
+        const text = await run(360, 434);
+        expect(text).not.toContain('[object Object]');
+    });
+
+    it('labels disjoint regions as same-file', async () => {
+        const text = await run(360, 434);
+        expect(text).toContain('same-file');
+        expect(text).not.toContain('overlapping-hunks');
+    });
+
+    it('labels colliding regions as overlapping-hunks', async () => {
+        const text = await run(360, 364);
+        expect(text).toContain('overlapping-hunks');
+    });
+});

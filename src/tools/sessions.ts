@@ -10,6 +10,7 @@ import {
     summarizeChangeset,
     changeSummaryLine,
     detectDuplicates,
+    type DuplicateMatch,
     type ChangeSummary,
 } from '../formatters.js';
 import { JulesAPIError, JulesStateError } from '../errors.js';
@@ -272,7 +273,27 @@ export function registerSessionTools(
                           sessions,
                           changeMap.size > 0 ? changeMap : undefined,
                       )
-                    : new Map<string, string[]>();
+                    : new Map<string, DuplicateMatch[]>();
+
+                // Group by strength so the caller can see how strong each
+                // claim is. "same file, different functions" and "the same
+                // lines" are very different claims and used to render
+                // identically (#34).
+                const renderDupes = (matches: DuplicateMatch[]): string => {
+                    const byStrength = new Map<string, string[]>();
+                    for (const m of matches) {
+                        if (!byStrength.has(m.strength)) {
+                            byStrength.set(m.strength, []);
+                        }
+                        byStrength.get(m.strength)!.push(m.id);
+                    }
+                    return [...byStrength.entries()]
+                        .map(
+                            ([strength, ids]) =>
+                                `${strength}: ${ids.join(', ')}`,
+                        )
+                        .join('; ');
+                };
 
                 const text = sessions
                     .map((s) => {
@@ -281,7 +302,7 @@ export function registerSessionTools(
                         if (compact) {
                             let line = formatSessionCompact(s, change);
                             if (dupes?.length) {
-                                line += `  [dup: ${dupes.join(', ')}]`;
+                                line += `  [dup ${renderDupes(dupes)}]`;
                             }
                             return line;
                         }
@@ -290,7 +311,7 @@ export function registerSessionTools(
                         if (change) extras.push(changeSummaryLine(change));
                         if (dupes?.length) {
                             extras.push(
-                                `Possible duplicates: ${dupes.join(', ')}`,
+                                `Possible duplicates — ${renderDupes(dupes)}`,
                             );
                         }
                         return extras.length

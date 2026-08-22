@@ -180,6 +180,16 @@ Or skip the babysitting with **`jules_run_task`**, which does create → approve
 
 `jules_get_session_diff` handles this for you — it walks the activities, picks the **last** (cumulative) changeset, strips binary patch blobs, and returns the plan + final diff in one readable block. Use it before approving a plan or opening a PR yourself. For a large changeset, pass `summary=true` to get just the list of changed files with `+/-` line counts instead of the full diff.
 
+**Duplicate flags carry a strength.** `detect_duplicates` annotates each match with how strong the claim actually is, because "same file" and "same lines" are very different things and used to render identically:
+
+| label               | meaning                                             | how much to trust it                                      |
+| ------------------- | --------------------------------------------------- | --------------------------------------------------------- |
+| `overlapping-hunks` | the two sessions edit intersecting line ranges      | strong — they really do collide                           |
+| `same-file`         | shared file, but the diffs sit in different regions | weak — frequently complementary work                      |
+| `similar-title`     | titles alone; no shared file, or no diff at all     | weakest — but this is what clusters repeated persona runs |
+
+Read both diffs before closing anything flagged `same-file` or `similar-title`.
+
 **The suggestions quota is local, not live.** Jules allows its "suggestions" feature on at most 5 repos, but the API does not expose which repos have it enabled — confirmed across all 474 connected sources, where each carries only `name`, `id` and `githubRepo`. `jules_configure_source` records it locally instead, so `suggestionsQuota` reflects what was last written there and can drift from reality if suggestions are toggled in the Jules web UI. Every response that reports the quota therefore names it as local and publishes the age of the oldest record, flagging it stale past 30 days. `suggestions_only` scans the whole source list by default; if a scan is truncated the quota renders as `at least N of 5 … SCAN INCOMPLETE` rather than an exact count, because a truncating filter cannot prove absence.
 
 **Finding the sessions for one repo:** `jules_list_sessions` returns _all_ sessions across every connected repo, which can be a lot. Pass `source` to filter to one repo (it scans up to 10 pages by default to gather matches), `compact: true` for a one-line-per-session listing, and `detect_changes: true` to mark which sessions actually produced code vs. a plan only — e.g. `jules_list_sessions(source: "bfr-shift-dashboard", compact: true, detect_changes: true)`.
