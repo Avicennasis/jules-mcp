@@ -77,6 +77,20 @@ export interface ChangeSummary {
     deletions: number;
     files: FileChange[];
     commitMessage?: string;
+    /**
+     * The commit this session's diff is expressed against — Jules pins it when
+     * the session is created and NEVER rebases it.
+     *
+     * This is the single most important field for deciding whether a session is
+     * safe to leave alone. If the session writes again, it re-applies its diff
+     * from THIS commit, so everything merged since is silently reverted. That is
+     * not hypothetical: it cost six merged PRs on GrantLoft and a reverted fix on
+     * rDNSFix on 2026-08-23 (Redmine #50386).
+     *
+     * Absent when the API omits `baseCommitId` — proto3 drops empty strings, so
+     * treat undefined as "unknown", never as "no base".
+     */
+    baseCommitId?: string;
 }
 
 /**
@@ -108,6 +122,7 @@ export function summarizeChangeset(
     const files: FileChange[] = [];
     let current: FileChange | undefined;
     let commitMessage: string | undefined;
+    let baseCommitId: string | undefined;
     let insertions = 0;
     let deletions = 0;
     let skippingLockfile = false;
@@ -118,6 +133,11 @@ export function summarizeChangeset(
         if (!gp) continue;
         if (gp.suggestedCommitMessage && !commitMessage) {
             commitMessage = gp.suggestedCommitMessage;
+        }
+        if (gp.baseCommitId && !baseCommitId) {
+            // First patch artifact wins: Jules repeats the same pinned base on
+            // every artifact of the cumulative changeset.
+            baseCommitId = gp.baseCommitId;
         }
         let inBinary = false;
         for (const line of (gp.unidiffPatch ?? '').split('\n')) {
@@ -185,14 +205,25 @@ export function summarizeChangeset(
         deletions,
         files,
         commitMessage,
+        baseCommitId,
     };
 }
 
-/** One-line trailing annotation describing a session's changeset. */
+/**
+ * One-line trailing annotation describing a session's changeset.
+ *
+ * Includes the pinned base commit when known. That short sha is the whole point
+ * of the line for anyone about to touch the session's PR branch: it is the
+ * commit the session will re-apply its diff from if it ever writes again, and
+ * anything merged after it gets reverted (Redmine #50386).
+ */
 export function changeSummaryLine(change: ChangeSummary): string {
-    if (!change.hasChanges) return 'Changes: none (plan only)';
+    const base = change.baseCommitId
+        ? `, base ${change.baseCommitId.slice(0, 7)}`
+        : '';
+    if (!change.hasChanges) return `Changes: none (plan only)${base}`;
     const files = `${change.changedFiles} file${change.changedFiles === 1 ? '' : 's'}`;
-    return `Changes: ${files}, +${change.insertions}/-${change.deletions}`;
+    return `Changes: ${files}, +${change.insertions}/-${change.deletions}${base}`;
 }
 
 /**

@@ -652,9 +652,9 @@ describe('summarizeChangeset', () => {
 });
 
 describe('changeSummaryLine', () => {
-    it('summarizes a changeset', () => {
+    it('summarizes a changeset, including the pinned base', () => {
         const cs = summarizeChangeset(changeActivities(multiFilePatch));
-        expect(changeSummaryLine(cs)).toBe('Changes: 2 files, +3/-2');
+        expect(changeSummaryLine(cs)).toBe('Changes: 2 files, +3/-2, base b');
     });
 
     it('says plan only when there are no changes', () => {
@@ -667,6 +667,86 @@ describe('changeSummaryLine', () => {
                 files: [],
             }),
         ).toBe('Changes: none (plan only)');
+    });
+
+    // The base is the field that tells a caller whether the session is safe to
+    // leave attached to a PR branch, so it has to survive into the one-line
+    // listing form and not only the full diff view (#50386).
+    it('shortens a full-length base sha to 7 characters', () => {
+        expect(
+            changeSummaryLine({
+                hasChanges: true,
+                changedFiles: 1,
+                insertions: 1,
+                deletions: 0,
+                files: [],
+                baseCommitId: '220ee9f07aab147866561f8d5a6ab9223e0e940c',
+            }),
+        ).toBe('Changes: 1 file, +1/-0, base 220ee9f');
+    });
+
+    it('omits the base when the API did not report one', () => {
+        expect(
+            changeSummaryLine({
+                hasChanges: true,
+                changedFiles: 1,
+                insertions: 1,
+                deletions: 0,
+                files: [],
+            }),
+        ).toBe('Changes: 1 file, +1/-0');
+    });
+
+    it('still reports the base on a plan-only session', () => {
+        expect(
+            changeSummaryLine({
+                hasChanges: false,
+                changedFiles: 0,
+                insertions: 0,
+                deletions: 0,
+                files: [],
+                baseCommitId: 'deadbeefcafe',
+            }),
+        ).toBe('Changes: none (plan only), base deadbee');
+    });
+});
+
+describe('summarizeChangeset base commit extraction', () => {
+    it('carries the pinned base out of the gitPatch artifact', () => {
+        const cs = summarizeChangeset(changeActivities(multiFilePatch));
+        expect(cs.baseCommitId).toBe('b');
+    });
+
+    it('leaves the base undefined when proto3 omitted it', () => {
+        // proto3 drops empty strings, so a gitPatch can arrive with no
+        // baseCommitId at all. Undefined must mean "unknown", never "no base".
+        const activities: Activity[] = [
+            {
+                name: 's/abc/activities/1',
+                id: '1',
+                createTime: 't',
+                originator: 'agent',
+                sessionCompleted: {},
+                artifacts: [
+                    {
+                        changeSet: {
+                            source: 'sources/github/o/r',
+                            gitPatch: {
+                                unidiffPatch:
+                                    'diff --git a/a.txt b/a.txt\n+hello',
+                            },
+                        },
+                    },
+                ],
+            } as unknown as Activity,
+        ];
+        const cs = summarizeChangeset(activities);
+        expect(cs.hasChanges).toBe(true);
+        expect(cs.baseCommitId).toBeUndefined();
+    });
+
+    it('leaves the base undefined when there is no changeset at all', () => {
+        expect(summarizeChangeset([]).baseCommitId).toBeUndefined();
     });
 });
 
