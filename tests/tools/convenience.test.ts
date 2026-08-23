@@ -200,3 +200,97 @@ describe('run_task parallel mode (B1-119)', () => {
         expect(mockClient.createSession).toHaveBeenCalledTimes(2);
     });
 });
+
+// #50: TERMINAL_STATES is {COMPLETED, FAILED} and pollToCompletion only
+// short-circuits on the two AWAITING_* states, so a PAUSED session fell
+// through to sleep-and-repoll every iteration and burned the whole deadline
+// (10 minutes by default) before reporting the wrong outcome. PAUSED is
+// reachable in normal use — archiving a session puts it there.
+describe('jules_run_task with a PAUSED session (#50)', () => {
+    const paused: Session = {
+        name: 's/9',
+        id: '9',
+        prompt: 'p',
+        sourceContext: { source: 'sources/github/o/r' },
+        state: 'PAUSED',
+        createTime: '',
+        updateTime: '',
+        url: 'u',
+    };
+
+    const build = () => {
+        const registered = new Map<string, { handler: Function }>();
+        const server = {
+            tool: vi.fn((n: string, _d: string, _s: any, h: Function) => {
+                registered.set(n, { handler: h });
+            }),
+        };
+        const client = {
+            createSession: vi.fn().mockResolvedValue(paused),
+            getSession: vi.fn().mockResolvedValue(paused),
+            approvePlan: vi.fn(),
+        } as unknown as JulesClient;
+        registerConvenienceTools(server as any, client);
+        return { registered, client };
+    };
+
+    const args = {
+        prompt: 'p',
+        source: 'github/o/r',
+        starting_branch: 'main',
+        reason: 'r',
+        poll_interval_ms: 10,
+        timeout_ms: 400,
+    };
+
+    it('returns promptly instead of burning the deadline', async () => {
+        const { registered } = build();
+        const t0 = Date.now();
+        await registered.get('jules_run_task')!.handler(args);
+        // With the bug this loops until timeout_ms (400ms) elapses.
+        expect(Date.now() - t0).toBeLessThan(200);
+    });
+
+    it('does not re-poll a session that cannot progress on its own', async () => {
+        const { registered, client } = build();
+        await registered.get('jules_run_task')!.handler(args);
+        // With the bug this is ~40 calls at a 10ms interval over 400ms.
+        expect(
+            (client.getSession as any).mock.calls.length,
+        ).toBeLessThanOrEqual(1);
+    });
+
+    it('reports it as paused, not as a timeout and not as success', async () => {
+        const { registered } = build();
+        const res = await registered.get('jules_run_task')!.handler(args);
+        const text = String(res.content[0].text);
+        expect(text).toMatch(/paused/i);
+        expect(text).not.toMatch(/timed out/i);
+    });
+
+    it('does not report a paused session as a completed run', async () => {
+        // The single-mode if-chain falls through to a bare formatSession(),
+        // so an unhandled outcome renders exactly like success. TypeScript
+        // cannot catch that — only an assertion on the output can.
+        const { registered } = build();
+        const res = await registered.get('jules_run_task')!.handler(args);
+        const text = String(res.content[0].text);
+        expect(text).not.toMatch(/^Session:/);
+    });
+
+    it('surfaces paused per-session in parallel mode', async () => {
+        const { registered } = build();
+        const res = await registered
+            .get('jules_run_task')!
+            .handler({ ...args, parallel: 2 });
+        const parsed = JSON.parse(String(res.content[0].text));
+        expect(parsed.sessions).toHaveLength(2);
+        // Assert the OUTCOME field, not just that the word "paused" appears —
+        // the buggy timeout note reads "Timed out while still PAUSED", which
+        // would satisfy a naive /paused/i match.
+        for (const s of parsed.sessions) {
+            expect(s.outcome).toBe('paused');
+            expect(s.note).not.toMatch(/timed out/i);
+        }
+    });
+});
