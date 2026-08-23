@@ -109,6 +109,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quota now labels it as local, names the file it came from, and publishes the
   age of the oldest record (`suggestionsOldestRecord`,
   `suggestionsRecordAgeDays`, `suggestionsStale` past 30 days) (#35).
+- `jules_run_task` polled a `PAUSED` session until the deadline expired
+  instead of returning. `TERMINAL_STATES` is `{COMPLETED, FAILED}` and
+  `pollToCompletion` short-circuited only on the two `AWAITING_*` states, so a
+  paused session — which cannot progress on its own — fell through to
+  sleep-and-repoll on every iteration, costing the full `timeout_ms` (10
+  minutes by default, ~120 wasted `getSession` calls) before reporting
+  `timeout`, which is not what happened. In `parallel` mode the whole call
+  could not return until the slowest paused session timed out. There is now a
+  `paused` outcome, surfaced in both single and parallel mode. `PAUSED`
+  deliberately stays out of `TERMINAL_STATES`: that set means "finished", and a
+  paused session can be resumed. Reachable in normal use — archiving a session
+  puts it in `PAUSED` (#50).
 - `detect_duplicates` reported "these two sessions edit the same file" and
   "these two sessions edit the same lines" identically, so two complementary
   changes to different functions of one file looked exactly like real

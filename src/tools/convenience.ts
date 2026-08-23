@@ -46,6 +46,7 @@ type PollOutcome =
     | { outcome: 'terminal'; session: Session }
     | { outcome: 'awaiting_plan_approval'; session: Session }
     | { outcome: 'awaiting_user_feedback'; session: Session }
+    | { outcome: 'paused'; session: Session }
     | { outcome: 'timeout'; session: Session }
     | { outcome: 'error'; session: Session; error: string };
 
@@ -88,6 +89,15 @@ async function pollToCompletion(
             return { outcome: 'awaiting_user_feedback', session: current };
         }
 
+        // A paused session cannot progress on its own, so polling it is
+        // pure waste — without this it burned the whole deadline (10 min by
+        // default) and then reported `timeout`, which is not what happened.
+        // PAUSED deliberately stays OUT of TERMINAL_STATES: that set means
+        // "finished", and a paused session can be resumed (#50).
+        if (current.state === 'PAUSED') {
+            return { outcome: 'paused', session: current };
+        }
+
         await sleep(opts.pollIntervalMs);
         current = await client.getSession(current.id);
     }
@@ -106,6 +116,8 @@ function outcomeNote(o: PollOutcome): string {
             return 'Plan ready for review — approve with jules_approve_plan.';
         case 'awaiting_user_feedback':
             return 'Needs user feedback — respond with jules_send_message.';
+        case 'paused':
+            return 'Session is paused — resume it in the Jules web app, or archive it with jules_archive_session.';
         case 'timeout':
             return `Timed out while still ${o.session.state} — poll with jules_get_session.`;
         case 'error':
@@ -336,6 +348,17 @@ export function registerConvenienceTools(
                             {
                                 type: 'text' as const,
                                 text: `Session needs user feedback. Use jules_send_message to respond.\n\n${formatSession(outcome.session)}`,
+                            },
+                        ],
+                    };
+                }
+
+                if (outcome.outcome === 'paused') {
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `Session is paused and will not progress on its own. Resume it in the Jules web app, or archive it with jules_archive_session.\n\n${formatSession(outcome.session)}`,
                             },
                         ],
                     };
