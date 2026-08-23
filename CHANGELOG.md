@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-23
+
+Versions 0.5.0-0.5.2 were bumped in `package.json` but never released or
+tagged, so this release covers everything since 0.4.0.
+
 ### Added
 
 - Comment-only change detection: `jules_get_session_diff` now emits a
