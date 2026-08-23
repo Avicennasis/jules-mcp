@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pinned base commit surfaced in change summaries. `ChangeSummary` now carries
+  `baseCommitId`, and `changeSummaryLine` renders it as `base <sha7>`, so
+  `jules_list_sessions(detect_changes: true)` shows the commit each session
+  will re-apply its diff from.
+
+    This is the field that makes the failure mode below detectable. A Jules
+    session pins its base at creation and **never rebases**; if it writes again,
+    everything merged since that commit is silently reverted. It happened twice
+    on 2026-08-23: `GrantLoft#361` reverted six already-merged PRs, and
+    `rDNSFix#88` reverted a fix three minutes after a human pushed it. Both
+    sessions read `COMPLETED` at the time — that state does not mean the session
+    is finished with the branch.
+
+    `baseCommitId` is `undefined` when the API omits it (proto3 drops empty
+    strings), and undefined means _unknown_, never _no base_.
+
+    Redmine #50386.
+
+### Documentation
+
+- New README section, "Reworking a Jules PR — read this before you
+  force-push": both incident timelines, how to read the base, and the
+  archive-before-you-push procedure.
+
 ## [0.6.0] - 2026-08-23
 
 Versions 0.5.0-0.5.2 were bumped in `package.json` but never released or

@@ -31,6 +31,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Tool reference](#tool-reference)
 - [Working with Jules: the lifecycle](#working-with-jules-the-lifecycle)
 - [Reviewing what Jules did](#reviewing-what-jules-did)
+- [Reworking a Jules PR — read this before you force-push](#reworking-a-jules-pr--read-this-before-you-force-push)
 - [Scheduling recurring tasks](#scheduling-recurring-tasks)
 - [Audit logging](#audit-logging)
 - [Jules API quirks worth knowing](#jules-api-quirks-worth-knowing)
@@ -203,6 +204,41 @@ Read both diffs before closing anything flagged `same-file` or `similar-title`.
 **The suggestions quota is local, not live.** Jules allows its "suggestions" feature on at most 5 repos, but the API does not expose which repos have it enabled — confirmed across all 474 connected sources, where each carries only `name`, `id` and `githubRepo`. `jules_configure_source` records it locally instead, so `suggestionsQuota` reflects what was last written there and can drift from reality if suggestions are toggled in the Jules web UI. Every response that reports the quota therefore names it as local and publishes the age of the oldest record, flagging it stale past 30 days. `suggestions_only` scans the whole source list by default; if a scan is truncated the quota renders as `at least N of 5 … SCAN INCOMPLETE` rather than an exact count, because a truncating filter cannot prove absence.
 
 **Finding the sessions for one repo:** `jules_list_sessions` returns _all_ sessions across every connected repo, which can be a lot. Pass `source` to filter to one repo (it scans up to 10 pages by default to gather matches), `compact: true` for a one-line-per-session listing, and `detect_changes: true` to mark which sessions actually produced code vs. a plan only — e.g. `jules_list_sessions(source: "bfr-shift-dashboard", compact: true, detect_changes: true)`.
+
+## Reworking a Jules PR — read this before you force-push
+
+**A Jules session pins the commit it started from and never rebases it.** If the session writes again, it re-applies its diff from that original base, so everything merged in between is silently reverted.
+
+This is not a corner case. It has happened twice:
+
+- **`GrantLoft#361`** — a reworked commit was force-pushed to the PR branch. 72 minutes later the session pushed its own commit on top, from a base six merges old. The squash merge took both, **reverting six already-merged PRs** and re-adding a dependency that had deliberately been stripped. Caught only because the test count dropped from 703 to 687.
+- **`rDNSFix#88`** — same day, same shape. A rework landed at `18:30:54`; the session pushed over it at `18:33:33`, reverting the fix and re-adding a benchmark file that had been deliberately excluded.
+
+In both cases the session's state was `COMPLETED`. **`COMPLETED` does not mean "done with the branch."** Check `updated_on` — in the second case it moved to `18:40:33`, long after the session supposedly finished.
+
+### The signal
+
+`detect_changes: true` now reports the pinned base on every row:
+
+```
+COMPLETED  15477337228242052698  Avicennasis/rDNSFix-Windows-Service  ::  ⚡ Optimize file count logging
+           Changes: 2 files, +61/-2, base 8c8bd62
+```
+
+Compare `base` against the repo's current default-branch head. If it is behind, that session **will** revert on its next write — the gap is exactly what gets lost.
+
+### The procedure
+
+1. Read the base (`jules_list_sessions` with `detect_changes: true`, or `jules_get_session`).
+2. **Archive the session before you push** — `jules_archive_session`. Reversible via `jules_unarchive_session`.
+3. Force-push your rework.
+4. Re-read the PR head and confirm it is still your commit before merging.
+
+If you would rather not rely on step 2 holding, the structurally safe option is to open a fresh PR from a branch Jules has no session for, and close theirs.
+
+> **Merging:** pin the head. `ClaudeCode/scripts/pr-merge-gate.sh` takes `EXPECT_HEAD` / `EXPECT_FILES` and refuses to merge a branch that moved since you reviewed it — `--force-with-lease` applied at merge time. It ran against `rDNSFix#88` after the second incident and correctly refused.
+
+Tracked as Redmine **#50386**.
 
 ## Scheduling recurring tasks
 
