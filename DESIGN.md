@@ -45,14 +45,21 @@ Key states:
 - `IN_PROGRESS` — Jules is working, poll with `get_session`
 - `COMPLETED` — check `outputs[]` for PRs
 
-## MCP Tools (15 total)
+## MCP Tools (19 total)
 
-### Sources (2 tools)
+> Counts here are asserted against `src/tools/` by `tests/readme-counts.test.ts`
+> (Redmine #50462). This section previously read "15 total" and omitted the local
+> source-config tools and the entire diff group — a design doc listing 15 of 19
+> tools is the same class of defect as the README's stale test count.
 
-| Tool                 | Jules API           | Description                                              |
-| -------------------- | ------------------- | -------------------------------------------------------- |
-| `jules_list_sources` | `GET /sources`      | List connected GitHub repos. Returns name, repo details. |
-| `jules_get_source`   | `GET /sources/{id}` | Get details for a specific source.                       |
+### Sources (4 tools)
+
+| Tool                        | Jules API           | Description                                                                                     |
+| --------------------------- | ------------------- | ----------------------------------------------------------------------------------------------- |
+| `jules_list_sources`        | `GET /sources`      | List connected GitHub repos. Auto-paginates; supports AIP-160 `filter`. Branch lists opt-in.    |
+| `jules_get_source`          | `GET /sources/{id}` | Get details for a specific source.                                                              |
+| `jules_configure_source`    | N/A (local)         | Record per-repo metadata the API does not expose (e.g. suggestions enabled). Requires `reason`. |
+| `jules_list_source_configs` | N/A (local)         | List all locally-stored source configurations.                                                  |
 
 ### Sessions (8 tools)
 
@@ -85,9 +92,16 @@ Key states:
 
 ### Convenience (1 tool)
 
-| Tool             | Jules API | Description                                                                                                                                                                                                                                                                                                                                                                 |
-| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_run_task` | composite | Create a session, poll until plan is ready, auto-approve, poll until completion, return results. One-shot "fire and forget" for when you trust Jules to just do the thing. Params: same as `create_session` plus `auto_approve` (default true), `poll_interval_ms` (default 5000), `timeout_ms` (default 600000 / 10 min). Reports progress via MCP progress notifications. |
+| Tool             | Jules API | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `jules_run_task` | composite | Create a session, poll until plan is ready, auto-approve, poll until completion, return results. One-shot "fire and forget" for when you trust Jules to just do the thing. Params: same as `create_session` plus `auto_approve` (default true), `poll_interval_ms` (default 5000), `timeout_ms` (default 600000 / 10 min), `parallel` (1–10, fans out N independent sessions). **Does not** report MCP progress notifications — see decision 2 and Redmine #50418. |
+
+### Diff & review (2 tools)
+
+| Tool                     | Jules API | Description                                                                                                                                                                                                                 |
+| ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_get_session_diff` | composite | Review-friendly view: header + plan + the **final** changeset, binary blobs summarized rather than dumped. `summary=true` returns files + `+/-` counts only. Walks activities, since `session.outputs` is frequently empty. |
+| `jules_pull_session`     | composite | Extract the final changeset as a `git apply`-ready unified diff, plus suggested commit message and per-file `+/-` summary. Mirrors the Jules CLI's `remote pull`.                                                           |
 
 ## Tool Design Notes
 
@@ -209,16 +223,64 @@ jules-mcp/
 
 ## What We're Taking from Each Community Repo
 
-| Idea                                                 | Source            | Adaptation                                                                                    |
-| ---------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------- |
-| Clean 8-tool API surface mapping                     | Omarbadran37      | Expanded to 12 tools (activities split, scheduling, convenience). Proper input normalization. |
-| Test infrastructure (Vitest + smoke tests)           | savethepolarbears | Vitest for unit tests. Smoke test script that hits real API.                                  |
-| Structured project layout                            | savethepolarbears | Similar separation — `tools/`, `scheduler/`, `types`.                                         |
-| Security: never log API keys, generic error messages | savethepolarbears | Key from env var, never in logs.                                                              |
-| In-process cron scheduling                           | savethepolarbears | Keeping this — not everyone uses n8n. Encrypted persistence with AES-256-GCM.                 |
-| **NOT taking**: Cookie auth, browser automation      | samihalawa        | Hard no — fragile, ToS-violating                                                              |
-| **NOT taking**: Activepieces integration             | savethepolarbears | Out of scope — keep the server platform-agnostic                                              |
-| **NOT taking**: Build artifacts in repo              | Omarbadran37      | Proper .gitignore, build on install                                                           |
+**Last surveyed 2026-08-23** (8 repos, read at code depth — cloned and read, not README-skimmed).
+Superseded the original design-time table, which covered 3 repos and described us as a
+12-tool server. We ship **19 tools**. Every row below links the Redmine ticket carrying
+the finding; the tickets hold the file:line citations and acceptance criteria.
+
+### Adopted at design time (original table, still true)
+
+| Idea                                                 | Source            | Adaptation                                                                        |
+| ---------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------- |
+| Clean 8-tool API surface mapping                     | Omarbadran37      | Expanded to **19 tools** (activities split, scheduling, convenience, diff group). |
+| Test infrastructure (Vitest + smoke tests)           | savethepolarbears | Vitest for unit tests. Smoke test script that hits real API.                      |
+| Structured project layout                            | savethepolarbears | Similar separation — `tools/`, `scheduler/`, `types`.                             |
+| Security: never log API keys, generic error messages | savethepolarbears | Key from env var, never in logs.                                                  |
+| In-process cron scheduling                           | savethepolarbears | Keeping this — not everyone uses n8n. Encrypted persistence with AES-256-GCM.     |
+
+### Open from the 2026-08-23 survey
+
+| Idea                                                               | Source                                            | Ticket                         |
+| ------------------------------------------------------------------ | ------------------------------------------------- | ------------------------------ |
+| Retry + backoff honoring `Retry-After` (4 impls to compare)        | georgeracu, MikBin, CodeAgentBridge, TheNovaNodes | #50416, #50447, #50451, #50461 |
+| MCP **prompts** primitive — reusable task templates                | savethepolarbears                                 | #50429                         |
+| MCP **resources** primitive — sessions/sources/diffs               | savethepolarbears                                 | #50430                         |
+| MCP resources as troubleshooting runbooks                          | samihalawa                                        | #50453                         |
+| `ToolAnnotations` + `structuredContent` + tool tags                | MikBin, CodeAgentBridge                           | #50443, #50450                 |
+| MCP progress notifications during long polls                       | georgeracu                                        | #50418                         |
+| Char-budget truncation with in-band recovery hints                 | georgeracu                                        | #50417                         |
+| Patch truncation with explicit truncated/length flags              | MikBin                                            | #50444                         |
+| Server-side activity filter `createTime>ISO` (only novel API find) | savethepolarbears                                 | #50436                         |
+| `include_archived` session listing                                 | MikBin                                            | #50445                         |
+| `check_jules` cheap status + source auto-resolution                | MikBin                                            | #50441                         |
+| `workingBranch` / `environmentVariablesEnabled` on create          | MikBin                                            | #50442                         |
+| Repoless sessions (no `sourceContext`)                             | savethepolarbears                                 | #50435                         |
+| `create_session_from_issue`                                        | maxnoller                                         | #50457                         |
+| `get_pr_url` / `get_last_message` reductions                       | GreyC                                             | #50458                         |
+| Secret-scan prompts before transmission                            | savethepolarbears                                 | #50431                         |
+| `JULES_ALLOWED_REPOS` allowlist                                    | savethepolarbears                                 | #50432                         |
+| Quota-aware cron gate (reject sub-hourly, 6-field cron)            | savethepolarbears                                 | #50433                         |
+| Dedicated `jules_delete_schedule` tool                             | savethepolarbears                                 | #50434                         |
+| Schedule-store hardening (atomic rename, corrupt backup)           | savethepolarbears                                 | #50437                         |
+| Completion notification via `updateTime` watermark                 | savethepolarbears                                 | #50438                         |
+| MSW network-layer test interception                                | georgeracu                                        | #50419                         |
+| Activity-union + omitted-field test fixtures                       | georgeracu                                        | #50420                         |
+| Path-segment URL encoding (**fixed** — `d279e12`)                  | georgeracu                                        | #50421                         |
+| npm publish / MCP Registry / OIDC release pipeline                 | georgeracu, GreyC, CodeAgentBridge                | #50422, #50459, #50449         |
+| Multi-stage Dockerfile                                             | samihalawa                                        | #50456                         |
+| Measure real Jules quota (field claims conflict)                   | georgeracu, savethepolarbears                     | #50428                         |
+
+### NOT taking — reconfirmed 2026-08-23
+
+| Decision                                     | Source            | Why, with the evidence that reconfirmed it                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cookie auth, browser automation**          | samihalawa        | Hard no — fragile, ToS-violating. Reconfirmed and strengthened: that repo commits a **live third-party API key** in `smithery.yaml`, tracks `node_modules/` (2,359 files), and its `jules_get_cookies` tool dumps raw Google SID cookies into model context. Its Angular selectors are near-certainly rotted since 2025-12. |
+| **Activepieces integration**                 | savethepolarbears | Out of scope — keep the server platform-agnostic. The genuinely useful part, the `updateTime` watermark poller, is extracted platform-agnostically in #50438.                                                                                                                                                               |
+| **Build artifacts in repo**                  | Omarbadran37      | Proper .gitignore, build on install.                                                                                                                                                                                                                                                                                        |
+| **GitHub-API PR creation inside the server** | maxnoller         | Their headline "automatic PR creation" is just `automationMode: AUTO_CREATE_PR` — the flag we already pass. No GitHub call exists in that repo. We keep relying on Jules' automation mode plus `jules_pull_session`.                                                                                                        |
+
+**Not yet surveyed:** `Omarbadran37` — cited in the original design-time table but **not** part
+of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as current.
 
 ## House Patterns (from existing SimmonsSystems MCP servers)
 
@@ -237,7 +299,16 @@ jules-mcp/
 1. **`require_plan_approval` defaults to `true`** — safer; Claude sees the plan before
    Jules executes. Users can override per-session.
 2. **`jules_run_task` convenience tool included** — composite create+poll+approve for
-   fire-and-forget usage. Reports progress via MCP progress notifications.
+   fire-and-forget usage, with `parallel` (1–10) fanning out N independent sessions.
+   **NOT BUILT: MCP progress notifications.** This line used to assert we report
+   progress via `notifications/progress`. We do not, and never did — there is no
+   `progressToken`, `sendNotification` or `_meta` handling in
+   `src/tools/convenience.ts`. `jules_run_task` polls blind for up to 600s with no
+   client feedback and no cancellation path. The intent stands and is tracked in
+   **Redmine #50418**; corrected under **#50463**. The same false claim also sat in
+   the Convenience tool table above and is corrected there too — when retiring a
+   claim, grep the whole document for it rather than fixing the instance you found.
+   Do not re-state this as done until #50418 closes.
 3. **v1alpha breakage** — #YOLO. Pin to v1alpha, move fast. If it breaks, we fix it.
    No version-negotiation complexity.
 4. **Scheduling included** — in-process cron with encrypted persistence. Not everyone
