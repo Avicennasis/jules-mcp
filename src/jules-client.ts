@@ -10,7 +10,7 @@ import {
     type Activity,
     type SourceContext,
     type AutomationMode,
-    normalizeResourceName,
+    encodeResourceName,
 } from './types.js';
 
 const BASE_URL = 'https://jules.googleapis.com/v1alpha';
@@ -141,7 +141,7 @@ export class JulesClient {
     }
 
     async getSource(name: string): Promise<Source> {
-        const normalized = normalizeResourceName(name, 'sources');
+        const normalized = encodeResourceName(name, 'sources');
         return this.request<Source>(`/${normalized}`);
     }
 
@@ -171,12 +171,12 @@ export class JulesClient {
     }
 
     async getSession(sessionId: string): Promise<Session> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         return this.request<Session>(`/${name}`);
     }
 
     async approvePlan(sessionId: string): Promise<Session> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         return this.request<Session>(`/${name}:approvePlan`, 'POST', {});
     }
 
@@ -191,7 +191,7 @@ export class JulesClient {
         sessionId: string,
         message: string,
     ): Promise<Session | undefined> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         // The Jules API expects the text under "prompt" (same field as session
         // creation), not "message".
         return this.request<Session | undefined>(
@@ -202,17 +202,17 @@ export class JulesClient {
     }
 
     async archiveSession(sessionId: string): Promise<Session> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         return this.request<Session>(`/${name}:archive`, 'POST', {});
     }
 
     async unarchiveSession(sessionId: string): Promise<Session> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         return this.request<Session>(`/${name}:unarchive`, 'POST', {});
     }
 
     async deleteSession(sessionId: string): Promise<void> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         await this.request<void>(`/${name}`, 'DELETE');
     }
 
@@ -223,7 +223,7 @@ export class JulesClient {
         pageSize?: number,
         pageToken?: string,
     ): Promise<{ activities: Activity[]; nextPageToken?: string }> {
-        const name = normalizeResourceName(sessionId, 'sessions');
+        const name = encodeResourceName(sessionId, 'sessions');
         const params = new URLSearchParams();
         if (pageSize) params.set('pageSize', String(pageSize));
         if (pageToken) params.set('pageToken', pageToken);
@@ -245,9 +245,17 @@ export class JulesClient {
         sessionId: string,
         activityId: string,
     ): Promise<Activity> {
-        const sessionName = normalizeResourceName(sessionId, 'sessions');
+        const sessionName = encodeResourceName(sessionId, 'sessions');
+        // activityId is interpolated into the path too, so it needs the same
+        // treatment -- encoded as a single segment (#50421).
+        const encodedActivityId = encodeURIComponent(activityId);
+        if (activityId === '' || activityId === '.' || activityId === '..') {
+            throw new Error(
+                `Invalid activity id ${JSON.stringify(activityId)}.`,
+            );
+        }
         return this.request<Activity>(
-            `/${sessionName}/activities/${activityId}`,
+            `/${sessionName}/activities/${encodedActivityId}`,
         );
     }
 }

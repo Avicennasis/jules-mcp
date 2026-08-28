@@ -204,3 +204,49 @@ export function normalizeResourceName(input: string, prefix: string): string {
     }
     return `${prefix}/${input}`;
 }
+
+/**
+ * Normalizes AND percent-encodes a resource name for safe interpolation into a
+ * URL path. Use this, not normalizeResourceName, anywhere the result reaches a
+ * request path (Redmine #50421).
+ *
+ * Normalization is not encoding. `normalizeResourceName` only prepends a
+ * prefix, so a crafted id reached a different API endpoint entirely:
+ *
+ *   getSession("../../../v1alpha/sources")
+ *     -> https://jules.googleapis.com/v1alpha/sources     (not a session at all)
+ *
+ * `?` and `#` were equally live: an id of `x?foo=1` injected a query parameter,
+ * and `x#frag` truncated the path.
+ *
+ * Two things are needed, and neither alone is sufficient:
+ *
+ *  1. Per-SEGMENT encoding, not whole-string. Source names legitimately contain
+ *     slashes -- `sources/github/Avicennasis/GrantLoft` is a real, valid name --
+ *     so encodeURIComponent over the whole string would break every source
+ *     lookup by turning its separators into %2F.
+ *
+ *  2. An explicit dot-segment rejection. encodeURIComponent("..") === "..",
+ *     unchanged, so per-segment encoding on its own still resolves traversal.
+ *     `.` and `..` are never valid Jules resource-name segments, so they are
+ *     refused rather than mangled -- a caller passing one has a bug or is
+ *     probing, and both deserve a loud error rather than a silent rewrite.
+ *
+ * Empty segments are refused for the same reason: `a//b` collapses in URL
+ * resolution and is never a legitimate name.
+ */
+export function encodeResourceName(input: string, prefix: string): string {
+    const normalized = normalizeResourceName(input, prefix);
+    const segments = normalized.split('/');
+
+    for (const segment of segments) {
+        if (segment === '' || segment === '.' || segment === '..') {
+            throw new Error(
+                `Invalid resource name ${JSON.stringify(input)}: ` +
+                    `path segment ${JSON.stringify(segment)} is not allowed.`,
+            );
+        }
+    }
+
+    return segments.map(encodeURIComponent).join('/');
+}
