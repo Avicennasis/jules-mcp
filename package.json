@@ -1,6 +1,6 @@
 {
   "name": "jules-mcp",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "MCP server for the Google Jules coding agent API",
   "type": "module",
   "main": "dist/index.js",
