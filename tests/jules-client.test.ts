@@ -250,6 +250,51 @@ describe('JulesClient', () => {
             expect(err).toBeInstanceOf(JulesRateLimitError);
             expect(err.retryAfter).toBe(60);
         });
+
+        // jules-mcp#50648. These assert the CLIENT actually routes the header
+        // through parseRetryAfterSeconds — a unit test of that parser passes
+        // whether or not handleError was ever changed.
+        // NOTE on coverage: only the garbage case witnesses the old bug at this
+        // layer. `''` was already falsy so the old ternary returned undefined,
+        // `'0'` was already truthy so parseInt returned 0 — both were correct
+        // before. And a whitespace-only header cannot reach the client at all:
+        // the Headers API trims header values, so `{'retry-after': '   '}`
+        // arrives as `''`. That input is covered in tests/retry-after.test.ts,
+        // where the parser can be called directly. Kept here as regression
+        // pinning, not as evidence.
+        it('a blank retry-after is undefined, never NaN and never 0', async () => {
+            for (const blank of ['', '   ']) {
+                mockFetch.mockResolvedValueOnce(
+                    jsonResponse({ error: 'slow down' }, 429, {
+                        'retry-after': blank,
+                    }),
+                );
+                const err = await client.listSources().catch((e) => e);
+                expect(err).toBeInstanceOf(JulesRateLimitError);
+                expect(err.retryAfter).toBeUndefined();
+                expect(Number.isNaN(err.retryAfter)).toBe(false);
+            }
+        });
+
+        it('an unparseable retry-after is undefined rather than NaN', async () => {
+            mockFetch.mockResolvedValueOnce(
+                jsonResponse({ error: 'slow down' }, 429, {
+                    'retry-after': 'soon',
+                }),
+            );
+            const err = await client.listSources().catch((e) => e);
+            expect(err.retryAfter).toBeUndefined();
+        });
+
+        it("retry-after '0' survives as a legitimate 0", async () => {
+            mockFetch.mockResolvedValueOnce(
+                jsonResponse({ error: 'slow down' }, 429, {
+                    'retry-after': '0',
+                }),
+            );
+            const err = await client.listSources().catch((e) => e);
+            expect(err.retryAfter).toBe(0);
+        });
     });
 });
 

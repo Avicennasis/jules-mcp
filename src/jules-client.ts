@@ -4,6 +4,7 @@ import {
     JulesNotFoundError,
     JulesRateLimitError,
 } from './errors.js';
+import { parseRetryAfterSeconds } from './retry-after.js';
 import {
     type Session,
     type Source,
@@ -98,9 +99,11 @@ export class JulesClient {
         }
 
         if (status === 429) {
-            const retryAfter = response.headers.get('retry-after');
+            // parseRetryAfterSeconds, not parseInt: a blank header must mean
+            // "no advice" (undefined), never 0 and never NaN. See
+            // src/retry-after.ts for why the NaN was the live hazard (#50648).
             throw new JulesRateLimitError(
-                retryAfter ? parseInt(retryAfter, 10) : undefined,
+                parseRetryAfterSeconds(response.headers.get('retry-after')),
             );
         }
 
