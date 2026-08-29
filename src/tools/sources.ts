@@ -4,6 +4,7 @@ import type { JulesClient } from '../jules-client.js';
 import type { SourceConfigStore } from '../source-config.js';
 import { describeSuggestionsQuota } from '../source-config.js';
 import { JulesAPIError } from '../errors.js';
+import { guardPageToken, guardPaginationDeadline } from '../pagination.js';
 
 /** Hard ceiling on auto-followed pages, regardless of what the caller asks. */
 const MAX_PAGE_CAP = 20;
@@ -94,8 +95,14 @@ export function registerSourceTools(
                 const allSources: Record<string, unknown>[] = [];
                 let token = page_token;
                 let pages = 0;
+                // Three independent terminations, because this walk decides
+                // scan COMPLETENESS for `suggestions_only` (#50645): the page
+                // cap below, a repeated-token guard, and a wall-clock deadline.
+                const seenTokens = new Set<string>();
+                const startedAt = Date.now();
 
                 do {
+                    guardPaginationDeadline(startedAt, 'sources');
                     const result = await client.listSources({
                         pageSize: page_size,
                         pageToken: token,
@@ -104,6 +111,7 @@ export function registerSourceTools(
                     allSources.push(
                         ...(result.sources as Record<string, unknown>[]),
                     );
+                    guardPageToken(result.nextPageToken, seenTokens, 'sources');
                     token = result.nextPageToken;
                     pages++;
                 } while (token && pages < limit);
