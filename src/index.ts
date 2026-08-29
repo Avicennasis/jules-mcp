@@ -25,7 +25,10 @@ const encryptionKey = process.env.JULES_ENCRYPTION_KEY;
 
 const server = new McpServer({
     name: 'jules-mcp',
-    version: '0.4.0',
+    // Keep in step with package.json. This literal was left at 0.4.0 through
+    // three releases, so every client's initialize response reported a version
+    // that had not existed since 2026-06 (#50713 tracks making it non-manual).
+    version: '0.7.0',
 });
 
 const client = new JulesClient(apiKey);
