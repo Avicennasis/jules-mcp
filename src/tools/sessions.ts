@@ -15,10 +15,7 @@ import {
 } from '../formatters.js';
 import { JulesAPIError, JulesStateError } from '../errors.js';
 import { loadGuidance, applyGuidance } from '../guidance.js';
-import {
-    guardPageToken,
-    guardPaginationDeadline,
-} from '../pagination.js';
+import { guardPageToken, guardPaginationDeadline } from '../pagination.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -250,7 +247,11 @@ export function registerSessionTools(
                     guardPaginationDeadline(startedAt, 'sessions');
                     const result = await client.listSessions(page_size, token);
                     collected.push(...result.sessions);
-                    guardPageToken(result.nextPageToken, seenTokens, 'sessions');
+                    guardPageToken(
+                        result.nextPageToken,
+                        seenTokens,
+                        'sessions',
+                    );
                     lastNextToken = result.nextPageToken;
                     token = result.nextPageToken;
                     pagesFetched++;

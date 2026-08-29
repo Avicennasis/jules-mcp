@@ -4,10 +4,7 @@ import type { JulesClient } from '../jules-client.js';
 import type { SourceConfigStore } from '../source-config.js';
 import { describeSuggestionsQuota } from '../source-config.js';
 import { JulesAPIError } from '../errors.js';
-import {
-    guardPageToken,
-    guardPaginationDeadline,
-} from '../pagination.js';
+import { guardPageToken, guardPaginationDeadline } from '../pagination.js';
 
 /** Hard ceiling on auto-followed pages, regardless of what the caller asks. */
 const MAX_PAGE_CAP = 20;

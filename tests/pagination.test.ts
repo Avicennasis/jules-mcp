@@ -66,7 +66,12 @@ describe('guardPaginationDeadline', () => {
     it('throws once past the deadline, naming the resource', () => {
         const started = 1_000_000;
         expect(() =>
-            guardPaginationDeadline(started, 'sessions', 60_000, started + 60_001),
+            guardPaginationDeadline(
+                started,
+                'sessions',
+                60_000,
+                started + 60_001,
+            ),
         ).toThrow(/sessions/);
     });
 
@@ -82,14 +87,15 @@ describe('guardPaginationDeadline', () => {
 // pagination loop rather than a copy of it written in this file. A harness that
 // re-implements the loop passes whether or not sources.ts was ever touched.
 
-function harness(client: Partial<JulesClient>, register: 'sources' | 'sessions') {
+function harness(
+    client: Partial<JulesClient>,
+    register: 'sources' | 'sessions',
+) {
     const registeredTools = new Map<string, { handler: Function }>();
     const mockServer: any = {
-        tool: vi.fn(
-            (name: string, _d: string, _s: any, handler: Function) => {
-                registeredTools.set(name, { handler });
-            },
-        ),
+        tool: vi.fn((name: string, _d: string, _s: any, handler: Function) => {
+            registeredTools.set(name, { handler });
+        }),
     };
     if (register === 'sources') {
         registerSourceTools(mockServer, client as JulesClient);
