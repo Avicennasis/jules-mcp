@@ -38,26 +38,32 @@ describe('serverInfo version', () => {
         // this repo. Only an implementation that genuinely opens and parses
         // package.json can return it.
         const sentinel = '9.8.7-fixture';
-        expect(readPackageVersion(fixture({ name: 'x', version: sentinel }))).toBe(sentinel);
+        expect(
+            readPackageVersion(fixture({ name: 'x', version: sentinel })),
+        ).toBe(sentinel);
 
         // Twice, with a different value, so a cached first read cannot pass.
-        expect(readPackageVersion(fixture({ name: 'x', version: '1.2.3-other' }))).toBe(
-            '1.2.3-other',
-        );
+        expect(
+            readPackageVersion(fixture({ name: 'x', version: '1.2.3-other' })),
+        ).toBe('1.2.3-other');
     });
 
     it('refuses to invent a version when package.json has none', () => {
-        expect(() => readPackageVersion(fixture({ name: 'x' }))).toThrow(/no usable "version"/);
-        expect(() => readPackageVersion(fixture({ name: 'x', version: '' }))).toThrow(
+        expect(() => readPackageVersion(fixture({ name: 'x' }))).toThrow(
             /no usable "version"/,
         );
-        expect(() => readPackageVersion(fixture({ name: 'x', version: 7 }))).toThrow(
-            /no usable "version"/,
-        );
+        expect(() =>
+            readPackageVersion(fixture({ name: 'x', version: '' })),
+        ).toThrow(/no usable "version"/);
+        expect(() =>
+            readPackageVersion(fixture({ name: 'x', version: 7 })),
+        ).toThrow(/no usable "version"/);
     });
 
     it('agrees with package.json', () => {
-        const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+        const pkg = JSON.parse(
+            readFileSync(join(ROOT, 'package.json'), 'utf8'),
+        );
         expect(pkg.version).toMatch(/^[0-9]+\.[0-9]+\.[0-9]+/);
         expect(VERSION).toBe(pkg.version);
     });

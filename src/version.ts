@@ -28,7 +28,9 @@ import { readFileSync } from 'node:fs';
  * compares this module's output to the same file it reads cannot fail, which
  * would make it worthless as a guard -- see tests/version.test.ts.
  */
-export function readPackageVersion(moduleUrl: string | URL = import.meta.url): string {
+export function readPackageVersion(
+    moduleUrl: string | URL = import.meta.url,
+): string {
     const pkgUrl = new URL('../package.json', moduleUrl);
     const parsed: unknown = JSON.parse(readFileSync(pkgUrl, 'utf8'));
 
