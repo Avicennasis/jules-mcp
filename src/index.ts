@@ -12,6 +12,7 @@ import { registerActivityTools } from './tools/activities.js';
 import { registerSchedulingTools } from './tools/scheduling.js';
 import { registerConvenienceTools } from './tools/convenience.js';
 import { registerDiffTools } from './tools/diff.js';
+import { VERSION } from './version.js';
 
 const apiKey = process.env.JULES_API_KEY;
 if (!apiKey) {
@@ -25,10 +26,11 @@ const encryptionKey = process.env.JULES_ENCRYPTION_KEY;
 
 const server = new McpServer({
     name: 'jules-mcp',
-    // Keep in step with package.json. This literal was left at 0.4.0 through
-    // three releases, so every client's initialize response reported a version
-    // that had not existed since 2026-06 (#50713 tracks making it non-manual).
-    version: '0.7.0',
+    // Read from package.json, never restated here (#50713). The literal that
+    // used to live on this line was left at 0.4.0 through three releases, so
+    // every client's initialize response reported a version that had not
+    // existed since 2026-06. See src/version.ts.
+    version: VERSION,
 });
 
 const client = new JulesClient(apiKey);
