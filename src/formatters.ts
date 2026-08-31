@@ -914,12 +914,11 @@ export function stripLockfileDiffs(diff: string): FilteredDiff {
     const out: string[] = [];
     const excluded: string[] = [];
     let skipping = false;
-    let currentFile = '';
 
     for (const line of lines) {
         if (line.startsWith('diff --git ')) {
             const match = line.match(/ b\/(.+)$/);
-            currentFile = match ? match[1] : '';
+            const currentFile = match ? match[1] : '';
             if (isLockfile(currentFile)) {
                 skipping = true;
                 excluded.push(currentFile);
@@ -951,12 +950,11 @@ export function stripJournalDiffs(diff: string): FilteredDiff {
     const out: string[] = [];
     const excluded: string[] = [];
     let skipping = false;
-    let currentFile = '';
 
     for (const line of lines) {
         if (line.startsWith('diff --git ')) {
             const match = line.match(/ b\/(.+)$/);
-            currentFile = match ? match[1] : '';
+            const currentFile = match ? match[1] : '';
             if (isJournalFile(currentFile)) {
                 skipping = true;
                 excluded.push(currentFile);
