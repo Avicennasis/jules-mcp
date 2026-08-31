@@ -269,6 +269,16 @@ These tripped us up while building against the live API; they're handled interna
 - **Diffs live in activity artifacts**, not `session.outputs`; cumulative changesets repeat across `progressUpdated` activities, so the last artifact-bearing activity holds the complete diff.
 - **Sessions can be archived, unarchived, and deleted** via `v1alpha` (`:archive`, `:unarchive`, and `DELETE`). Archiving is reversible and is the recommended way to close out finished work; `Session.archived` reflects the state. (Earlier `v1alpha` had no such endpoints — they were added later, so older notes claiming "web UI only" are out of date.)
 
+### Measured against the live API, 2026-08-31
+
+Each of these was observed directly, not inferred from documentation or from another project's source. Dated because `v1alpha` moves.
+
+- **Jules has live internet access, and will fetch URLs you put in a prompt.** Confirmed both ways: a nonce marker present only on a public page came back verbatim, and the target host logged two fetches from `34.134.215.5` (Google LLC) — one with **Lynx**, one with **curl**. Anything you interpolate into a prompt from an untrusted source is therefore not just text Jules reads; it is a list of places Jules may go. Whether it follows links found _within_ a fetched page is **untested**.
+- **Plan approval carries forward across revisions.** Once a plan is approved, sending a revision produces a _new_ plan that executes straight through — no second `AWAITING_PLAN_APPROVAL`, no approval activity. So "approve, then refine" silently runs the refined plan unreviewed. If you need the gate, revise **before** approving.
+- **`automationMode` accepts only `AUTOMATION_MODE_UNSPECIFIED` and `AUTO_CREATE_PR`.** `NONE` is rejected: `400 INVALID_ARGUMENT`, `Invalid value at 'session.automation_mode' (type.googleapis.com/google.labs.jules.v1alpha.AutomationMode)`. Errors use the standard `google.rpc` envelope with a typed `details[]` array.
+- **Archiving a running session moves it to `PAUSED`, not to a terminal state.** An archived session is therefore still non-terminal, and a poll loop keyed on terminal states will wait on it until the deadline.
+- **`createSession` responses do carry `state`** (`QUEUED`) — worth knowing because some community clients default an assumed-missing `state` client-side.
+
 ## Project layout
 
 ```
