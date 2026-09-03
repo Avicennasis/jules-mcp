@@ -6,6 +6,14 @@ import type {
     Artifact,
 } from './types.js';
 
+/**
+ * Rendered in place of `sourceContext.source` when the API response omits it.
+ * Some endpoints (`:approvePlan`) do not send `sourceContext` at all (#50828),
+ * and printing an explicit placeholder is more honest than printing
+ * `undefined` -- or than throwing, which is what the unguarded deref did.
+ */
+export const UNKNOWN_SOURCE = '(not reported by the API)';
+
 const STATE_DESCRIPTIONS: Record<SessionState, string> = {
     STATE_UNSPECIFIED: 'Unknown state',
     QUEUED: 'Queued — waiting to start',
@@ -260,7 +268,7 @@ export function formatSessionCompact(
     session: Session,
     change?: ChangeSummary,
 ): string {
-    const source = session.sourceContext.source.replace(
+    const source = (session.sourceContext?.source ?? UNKNOWN_SOURCE).replace(
         /^sources\/github\//,
         '',
     );
@@ -289,7 +297,7 @@ export function formatSession(
     if (opts?.includePrompt !== false) {
         parts.push(`Prompt: ${session.prompt}`);
     }
-    parts.push(`Source: ${session.sourceContext.source}`);
+    parts.push(`Source: ${session.sourceContext?.source ?? UNKNOWN_SOURCE}`);
     parts.push(`URL: ${session.url}`);
     parts.push(`Created: ${session.createTime ?? '(pending)'}`);
     parts.push(`Updated: ${session.updateTime ?? '(pending)'}`);
@@ -762,7 +770,11 @@ export function detectDuplicates(
         for (let j = i + 1; j < sessions.length; j++) {
             const a = sessions[i];
             const b = sessions[j];
-            if (a.sourceContext.source !== b.sourceContext.source) continue;
+            // A session whose source the API did not report is never
+            // treated as a duplicate of anything -- two unknowns are not a
+            // match (#50828).
+            const sourceA = a.sourceContext?.source;
+            if (!sourceA || sourceA !== b.sourceContext?.source) continue;
 
             const titleA = normalizeTitle(a.title ?? a.id);
             const titleB = normalizeTitle(b.title ?? b.id);
@@ -1025,7 +1037,7 @@ export function formatSessionDiff(
     const parts: string[] = [];
     parts.push(`Session: ${session.title ?? session.id}`);
     parts.push(`State: ${session.state} — ${describeState(session.state)}`);
-    parts.push(`Source: ${session.sourceContext.source}`);
+    parts.push(`Source: ${session.sourceContext?.source ?? UNKNOWN_SOURCE}`);
     parts.push(`URL: ${session.url}`);
 
     const planActivity = activities.find((a) => a.planGenerated);
@@ -1176,7 +1188,7 @@ export function summarizeSessionDiff(
     const parts: string[] = [];
     parts.push(`Session: ${session.title ?? session.id}`);
     parts.push(`State: ${session.state} — ${describeState(session.state)}`);
-    parts.push(`Source: ${session.sourceContext.source}`);
+    parts.push(`Source: ${session.sourceContext?.source ?? UNKNOWN_SOURCE}`);
     parts.push(`URL: ${session.url}`);
 
     const planActivity = activities.find((a) => a.planGenerated);

@@ -259,8 +259,11 @@ export function registerSessionTools(
 
                 const needle = source?.toLowerCase();
                 let sessions = needle
-                    ? collected.filter((s) =>
-                          s.sourceContext.source.toLowerCase().includes(needle),
+                    ? collected.filter(
+                          (s) =>
+                              s.sourceContext?.source
+                                  ?.toLowerCase()
+                                  .includes(needle) ?? false,
                       )
                     : collected;
 
@@ -436,18 +439,59 @@ export function registerSessionTools(
                     throw new JulesStateError('approve_plan', current.state);
                 }
 
-                const session = await client.approvePlan(session_id);
-                await emitAudit({
-                    source: 'jules-mcp',
-                    category: 'coding-task',
-                    action: 'POST',
-                    service: session.sourceContext.source,
-                    reason,
-                    target: session.id,
-                });
+                const approved = await client.approvePlan(session_id);
+
+                // Past this point the plan HAS been approved server-side. The
+                // :approvePlan response does not carry sourceContext (measured
+                // against the live API 2026-08-31, #50828), so reading the
+                // audit's `service` off the response threw AFTER the mutation
+                // landed: the caller saw a 500 for an approval that succeeded,
+                // no audit record was written, and a retrying caller would
+                // approve twice. Nothing below this line may report failure.
+                let session: Session | undefined = approved?.sourceContext
+                    ? approved
+                    : undefined;
+                if (!session) {
+                    try {
+                        session = await client.getSession(session_id);
+                    } catch {
+                        // Leave undefined; the approval still landed.
+                    }
+                }
+
+                try {
+                    await emitAudit({
+                        source: 'jules-mcp',
+                        category: 'coding-task',
+                        action: 'POST',
+                        // From the session we already hold (pre-fetched at the
+                        // state check above), never off the response.
+                        service:
+                            current.sourceContext?.source ??
+                            session?.sourceContext?.source ??
+                            session_id,
+                        reason,
+                        target: session?.id ?? current.id ?? session_id,
+                    });
+                } catch (auditError) {
+                    // Swallow. The mutation landed; an audit failure must not
+                    // be reported to the caller as a failed approval. The same
+                    // rule already applies inside emitAudit itself -- it was
+                    // bypassed here because the throw was in the *argument*
+                    // construction, outside emitAudit's own guard.
+                    console.error(
+                        `[audit] emit failed after a successful plan approval: ${String(auditError)}`,
+                    );
+                }
+
                 return {
                     content: [
-                        { type: 'text' as const, text: formatSession(session) },
+                        {
+                            type: 'text' as const,
+                            text: session
+                                ? formatSession(session)
+                                : `Plan approved for session ${session_id}. The API returned no session payload and re-reading the session failed, so current state is unknown — the approval landed.`,
+                        },
                     ],
                 };
             } catch (error) {
@@ -543,9 +587,9 @@ export function registerSessionTools(
                     source: 'jules-mcp',
                     category: 'coding-task',
                     action: 'POST',
-                    service: session.sourceContext.source,
+                    service: session.sourceContext?.source ?? session_id,
                     reason,
-                    target: session.id,
+                    target: session.id ?? session_id,
                     payload: { archived: true },
                 });
                 return {
@@ -590,9 +634,9 @@ export function registerSessionTools(
                     source: 'jules-mcp',
                     category: 'coding-task',
                     action: 'POST',
-                    service: session.sourceContext.source,
+                    service: session.sourceContext?.source ?? session_id,
                     reason,
-                    target: session.id,
+                    target: session.id ?? session_id,
                     payload: { archived: false },
                 });
                 return {

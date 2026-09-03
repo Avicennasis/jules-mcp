@@ -211,6 +211,93 @@ describe('session tools', () => {
         });
     });
 
+    // #50828: the :approvePlan response does not carry sourceContext, so the
+    // audit line's `session.sourceContext.source` threw AFTER the POST had
+    // already approved the plan — reporting a 500 for a mutation that landed,
+    // and writing no audit record for it. The fixture below is modelled on the
+    // REAL response shape (no sourceContext), not on a fully-populated Session.
+    describe('jules_approve_plan when the response omits sourceContext', () => {
+        // Every field a Session carries EXCEPT sourceContext.
+        const approveResponseNoSourceContext = {
+            name: 'sessions/abc',
+            id: 'abc',
+            prompt: 'fix bug',
+            state: 'IN_PROGRESS',
+            createTime: '2026-01-01T00:00:00Z',
+            updateTime: '2026-01-01T00:10:00Z',
+            url: 'https://jules.google/sessions/abc',
+        };
+
+        beforeEach(() => {
+            (mockClient.getSession as any)
+                .mockResolvedValueOnce({
+                    ...mockSession,
+                    state: 'AWAITING_PLAN_APPROVAL',
+                })
+                .mockResolvedValue({ ...mockSession, state: 'IN_PROGRESS' });
+            (mockClient.approvePlan as any).mockResolvedValue(
+                approveResponseNoSourceContext,
+            );
+        });
+
+        it('reports success rather than a 500', async () => {
+            const handler = registeredTools.get('jules_approve_plan')!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'plan looks right',
+            });
+            expect(mockClient.approvePlan).toHaveBeenCalledWith('abc');
+            expect(result.isError).toBeUndefined();
+            expect(result.content[0].text).not.toContain('"status":"ERROR"');
+        });
+
+        it('still emits the audit record, using the pre-fetched source', async () => {
+            const { emitAudit } = await import('../../src/audit.js');
+            const handler = registeredTools.get('jules_approve_plan')!.handler;
+            await handler({ session_id: 'abc', reason: 'plan looks right' });
+            expect(emitAudit).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    action: 'POST',
+                    service: 'sources/github/o/r',
+                    reason: 'plan looks right',
+                    target: 'abc',
+                }),
+            );
+            // and never the failure record, since nothing failed
+            expect(emitAudit).not.toHaveBeenCalledWith(
+                expect.objectContaining({ action: 'POST_FAIL' }),
+            );
+        });
+
+        it('does not turn a landed approval into an error when the audit path throws', async () => {
+            const { emitAudit } = await import('../../src/audit.js');
+            (emitAudit as any).mockRejectedValue(new Error('inkwell exploded'));
+            const handler = registeredTools.get('jules_approve_plan')!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'plan looks right',
+            });
+            expect(mockClient.approvePlan).toHaveBeenCalledWith('abc');
+            expect(result.isError).toBeUndefined();
+        });
+
+        it('still reports success when the post-approval re-read fails', async () => {
+            (mockClient.getSession as any).mockReset();
+            (mockClient.getSession as any)
+                .mockResolvedValueOnce({
+                    ...mockSession,
+                    state: 'AWAITING_PLAN_APPROVAL',
+                })
+                .mockRejectedValue(new Error('transient'));
+            const handler = registeredTools.get('jules_approve_plan')!.handler;
+            const result = await handler({
+                session_id: 'abc',
+                reason: 'plan looks right',
+            });
+            expect(result.isError).toBeUndefined();
+        });
+    });
+
     it('jules_get_session returns formatted session', async () => {
         const handler = registeredTools.get('jules_get_session')!.handler;
         const result = await handler({ session_id: 'abc' });
