@@ -52,7 +52,14 @@ export interface Session {
     id: string;
     prompt: string;
     title?: string;
-    sourceContext: SourceContext;
+    /**
+     * Optional because the API does not send it on every response: the
+     * `:approvePlan` reply omits it entirely (#50828). Declaring it required
+     * meant `tsc` could not see any of the unguarded `.sourceContext.source`
+     * dereferences, and one of them threw in production. Treat every API field
+     * as optional and guard it.
+     */
+    sourceContext?: SourceContext;
     requirePlanApproval?: boolean;
     automationMode?: AutomationMode;
     createTime: string;

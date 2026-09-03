@@ -133,4 +133,17 @@ describe('emitAudit', () => {
         // Should not throw
         await expect(emitAudit(baseOpts)).resolves.toBeUndefined();
     });
+
+    // #50828: the callback path above was already guarded, but a throw raised
+    // *before* the callback -- execFile rejecting its argv, for instance --
+    // escaped emitAudit and rejected the promise, which turns a mutation that
+    // already landed into a failure reported to the caller.
+    it('swallows a synchronous throw from execFile without rejecting', async () => {
+        const mockExecFile = vi.mocked(execFile);
+        mockExecFile.mockImplementation(() => {
+            throw new TypeError('The "args" argument must be of type string');
+        });
+
+        await expect(emitAudit(baseOpts)).resolves.toBeUndefined();
+    });
 });

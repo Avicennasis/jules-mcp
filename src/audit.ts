@@ -96,9 +96,18 @@ function emitViaJsonl(opts: AuditOptions): void {
 }
 
 export async function emitAudit(opts: AuditOptions): Promise<void> {
-    if (inkwellAvailable()) {
-        await emitViaInkwell(opts);
-    } else {
-        emitViaJsonl(opts);
+    // Audit failures must never block, or fail, a mutation. Both emitters
+    // already swallow their own errors, but the paths *before* them can still
+    // throw -- e.g. an undefined `service` reaching execFile's argv validation
+    // -- and a rejection here turns a landed mutation into a reported failure
+    // (#50828). Guard the whole thing so emitAudit can never reject.
+    try {
+        if (inkwellAvailable()) {
+            await emitViaInkwell(opts);
+        } else {
+            emitViaJsonl(opts);
+        }
+    } catch (error) {
+        console.error(`[audit] emit failed: ${(error as Error).message}`);
     }
 }

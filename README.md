@@ -17,7 +17,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 257 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 264 unit tests, smoke test against the live API.
 
 ---
 
@@ -62,7 +62,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 257 unit tests
+npm test           # 264 unit tests
 ```
 
 ## Configuration
@@ -278,6 +278,7 @@ Each of these was observed directly, not inferred from documentation or from ano
 - **`automationMode` accepts only `AUTOMATION_MODE_UNSPECIFIED` and `AUTO_CREATE_PR`.** `NONE` is rejected: `400 INVALID_ARGUMENT`, `Invalid value at 'session.automation_mode' (type.googleapis.com/google.labs.jules.v1alpha.AutomationMode)`. Errors use the standard `google.rpc` envelope with a typed `details[]` array.
 - **Archiving a running session moves it to `PAUSED`, not to a terminal state.** An archived session is therefore still non-terminal, and a poll loop keyed on terminal states will wait on it until the deadline.
 - **`createSession` responses do carry `state`** (`QUEUED`) — worth knowing because some community clients default an assumed-missing `state` client-side.
+- **`:approvePlan` responses do NOT carry `sourceContext`.** The approval itself lands, but the reply omits the field, so `session.sourceContext.source` on the response threw _after_ the mutation had succeeded — the caller saw a 500 for an approval that worked, and no audit record was written. `:archive` responses do carry it. Because of this, `Session.sourceContext` is declared **optional** in `src/types.ts`: assume it may be absent from any response and guard the dereference. Redmine #50828.
 
 ## Project layout
 
@@ -310,7 +311,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (257 tests)
+npm test             # vitest run (264 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)

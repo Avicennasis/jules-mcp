@@ -10,6 +10,7 @@ import {
     detectTestFrameworkConflicts,
     detectCommentOnlyChanges,
     extractQualitySignals,
+    UNKNOWN_SOURCE,
 } from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
 
@@ -168,7 +169,7 @@ export function registerDiffTools(
                 const headerParts = [
                     `Session: ${session.title ?? session.id}`,
                     `State: ${session.state}`,
-                    `Source: ${session.sourceContext.source}`,
+                    `Source: ${session.sourceContext?.source ?? UNKNOWN_SOURCE}`,
                     `Suggested branch: ${suggestBranchName(session)}`,
                     result.commitMessage
                         ? `Commit message: ${result.commitMessage}`

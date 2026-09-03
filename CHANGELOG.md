@@ -27,11 +27,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
     Redmine #50386.
 
+### Fixed
+
+- `jules_approve_plan` no longer reports a 500 for an approval that succeeded.
+  The `:approvePlan` response does not carry `sourceContext`, so building the
+  audit entry from `session.sourceContext.source` threw _after_ the plan had
+  already been approved server-side. The caller saw a 500 carrying
+  `TypeError: Cannot read properties of undefined`, **no audit record was
+  written for a mutation that landed**, and a retrying caller would approve
+  twice.
+
+    The audit entry is now built from the session fetched for the pre-flight
+    state check — a value we already hold — never from the response, matching
+    what `jules_run_task`'s auto-approve path (`convenience.ts`) has always
+    done. The response is used for rendering only, with a re-read fallback when
+    it is not a full session, mirroring `jules_send_message`.
+
+    Redmine #50828.
+
+- Audit emission can no longer convert a landed mutation into a reported
+  failure. `emitAudit` swallowed errors from its two emitters but could still
+  reject from anything raised before them; the successful-approval path also
+  wraps the call. The rule "audit failures must never block mutations" was
+  bypassed because the original throw happened in the _argument construction_,
+  outside `emitAudit`'s own guard.
+
+- `Session.sourceContext` is now optional in `src/types.ts`, which is what
+  makes the class of defect visible to `tsc` rather than only at runtime.
+  Declaring it required meant the compiler could not see any of the nine
+  unguarded `.sourceContext.source` dereferences across `sessions.ts`,
+  `formatters.ts` and `diff.ts`. All are now guarded; renderers fall back to
+  `(not reported by the API)` and duplicate detection never treats two unknown
+  sources as a match.
+
 ### Documentation
 
 - New README section, "Reworking a Jules PR — read this before you
   force-push": both incident timelines, how to read the base, and the
   archive-before-you-push procedure.
+- Measured API behaviour recorded: `:approvePlan` omits `sourceContext` while
+  `:archive` carries it, so every response field must be treated as optional.
 
 ## [0.6.0] - 2026-08-23
 
