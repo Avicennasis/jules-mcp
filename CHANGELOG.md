@@ -31,10 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `jules_approve_plan` no longer reports a 500 for an approval that succeeded.
   The `:approvePlan` response does not carry `sourceContext`, so building the
-  audit entry from `session.sourceContext.source` threw *after* the plan had
-  already been approved server-side. The caller saw `TypeError: Cannot read
-  properties of undefined (reading 'source')` with code 500, **no audit record
-  was written for a mutation that landed**, and a retrying caller would approve
+  audit entry from `session.sourceContext.source` threw _after_ the plan had
+  already been approved server-side. The caller saw a 500 carrying
+  `TypeError: Cannot read properties of undefined`, **no audit record was
+  written for a mutation that landed**, and a retrying caller would approve
   twice.
 
     The audit entry is now built from the session fetched for the pre-flight
@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure. `emitAudit` swallowed errors from its two emitters but could still
   reject from anything raised before them; the successful-approval path also
   wraps the call. The rule "audit failures must never block mutations" was
-  bypassed because the original throw happened in the *argument construction*,
+  bypassed because the original throw happened in the _argument construction_,
   outside `emitAudit`'s own guard.
 
 - `Session.sourceContext` is now optional in `src/types.ts`, which is what
