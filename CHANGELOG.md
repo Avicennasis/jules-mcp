@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP prompts.** Seven reusable task templates (`src/prompts/`), served over
+  `prompts/list` and `prompts/get` and surfaced by clients as slash commands:
+  `add-tests-for-module`, `fix-failing-ci`, `upgrade-dependency`,
+  `refactor-for-readability`, `write-missing-docs`, `triage-stale-sessions`,
+  `review-session-diff`.
+
+    Each template's advertised arguments are **derived by scanning its own body**
+    for placeholder tokens, rather than declared beside it. Adding `<TIMEOUT>` to
+    a body *is* adding a `TIMEOUT` argument, so the template and its schema
+    cannot drift apart — the same class of defect as the README count drift in
+    #50462/#50463, fixed the same way. Two token forms: `<NAME>` for an
+    operator-supplied identifier, `[[NAME]]` for externally-sourced text, which
+    is nonce-fenced through `src/untrusted.ts`. The fencing decision therefore
+    also follows from the body, with no side list to forget.
+
+    Every argument is optional, so `prompts/get` with no arguments renders the
+    template with its placeholders visible — a preview, through the same
+    substitution path a filled render uses.
+
+    Served through two low-level handlers rather than `McpServer.registerPrompt`.
+    That call exists in the pinned SDK (1.30.0) but parses `params.arguments`
+    against a Zod object, and a Zod object rejects `undefined` however optional
+    its fields are — so `prompts/get` with `arguments` omitted failed with
+    `Invalid input: expected object, received undefined` for every prompt that
+    advertises arguments, which is exactly the preview case. `arguments` is
+    optional in the protocol, so a client is entitled to omit it. Measured
+    against a real `Client` over `InMemoryTransport`.
+
+    Templates carry no standing guidance of their own: `jules_create_session`
+    prepends `guidance.md` at creation time, so embedding it would ship it twice.
+    Scope is written as positive enclosure ("ONLY add or extend tests covering
+    …") rather than as a list of prohibitions, and a test enforces it.
+
+    Idea from `melbinjp/jules-prompts` (MIT); implementation is our own.
+    Redmine #50429.
+
 - `SessionState` is now an **open union**, and `jules_run_task` stops on states
   it does not recognise instead of polling them to the deadline.
 

@@ -12,6 +12,7 @@ import { registerActivityTools } from './tools/activities.js';
 import { registerSchedulingTools } from './tools/scheduling.js';
 import { registerConvenienceTools } from './tools/convenience.js';
 import { registerDiffTools } from './tools/diff.js';
+import { registerPrompts } from './prompts/register.js';
 import { VERSION } from './version.js';
 
 const apiKey = process.env.JULES_API_KEY;
@@ -45,6 +46,10 @@ registerActivityTools(server, client);
 registerSchedulingTools(server, manager);
 registerConvenienceTools(server, client);
 registerDiffTools(server, client);
+
+// Register prompt templates. Before connect(): the prompts capability is part
+// of the initialize response.
+registerPrompts(server);
 
 // Start scheduler
 manager.start();
