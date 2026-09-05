@@ -231,6 +231,30 @@ describe('planRetry — delay', () => {
     });
 });
 
+// #50461. Without jitter, N parallel sessions rate-limited together retry in
+// lockstep and re-collide — which is precisely the failure mode our `parallel`
+// fan-out in jules_run_task creates. This uses the REAL default randomness: a
+// test that injects `random` cannot show the shipped default is jittered at all.
+describe('planRetry — parallel callers do not retry in lockstep', () => {
+    it('produces distinct delays across concurrent identical calls', () => {
+        const delays = Array.from(
+            { length: 20 },
+            () =>
+                planRetry({
+                    method: 'GET',
+                    status: 429,
+                    attempt: 0,
+                    maxRetries: 3,
+                }).delayMs,
+        );
+
+        // 20 draws from a continuous jitter range collide with probability ~0.
+        // A jitterMs of 0, or jitter dropped from the shipped defaults, gives
+        // exactly one distinct value.
+        expect(new Set(delays).size).toBeGreaterThan(1);
+    });
+});
+
 describe('planRetry — a wait longer than we are willing to block is not a retry', () => {
     it('declines when Retry-After exceeds maxDelayMs', () => {
         // Sleeping an hour inside an MCP tool call is worse than failing: the

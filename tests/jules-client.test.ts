@@ -466,6 +466,20 @@ describe('JulesClient retry', () => {
         expect(mockFetch).toHaveBeenCalledTimes(3); // 1 + 2 retries
     });
 
+    // #50461's fourth criterion. The error-mapping block above pins
+    // retries: 0, so without this nothing asserts that the SHIPPED default
+    // leaves a 401/403/404 alone — the TheNovaNodes bug exactly, where a
+    // predicate that rejects 4xx was written, tested, and never wired in.
+    it.each([401, 403, 404])(
+        'never retries a %i on the real request path',
+        async (status) => {
+            mockFetch.mockResolvedValue(jsonResponse({ error: 'no' }, status));
+            await expect(retrying().getSession('sessions/1')).rejects.toThrow();
+            expect(mockFetch).toHaveBeenCalledTimes(1);
+            expect(slept).toEqual([]);
+        },
+    );
+
     it('retries a network error on GET but not on POST', async () => {
         mockFetch
             .mockRejectedValueOnce(new TypeError('fetch failed'))
