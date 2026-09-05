@@ -5,6 +5,7 @@ import {
     JulesRateLimitError,
 } from './errors.js';
 import { parseRetryAfterSeconds } from './retry-after.js';
+import { planRetry } from './retry.js';
 import {
     type Session,
     type Source,
@@ -21,6 +22,28 @@ const BASE_URL = 'https://jules.googleapis.com/v1alpha';
  * `timeoutMs` parameter (B1-118). */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+/** Retries per request, on top of the first attempt. See src/retry.ts for the
+ * policy: a 429 replays for any method, a 5xx or network failure only for
+ * idempotent ones (#50643). */
+const DEFAULT_RETRIES = 2;
+
+/** Real sleep. Injectable via the constructor so tests need no fake timers. */
+const realSleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+export interface JulesClientOptions {
+    requestTimeoutMs?: number;
+    /** Retries per request. `0` disables retrying. */
+    retries?: number;
+    retryBaseDelayMs?: number;
+    retryJitterMs?: number;
+    retryMaxDelayMs?: number;
+    /** Jitter source; injectable for deterministic tests. */
+    random?: () => number;
+    /** Sleep between attempts; injectable for deterministic tests. */
+    sleep?: (ms: number) => Promise<void>;
+}
+
 export interface CreateSessionRequest {
     prompt: string;
     sourceContext: SourceContext;
@@ -32,11 +55,27 @@ export interface CreateSessionRequest {
 export class JulesClient {
     private readonly apiKey: string;
     private readonly requestTimeoutMs: number;
+    private readonly retries: number;
+    private readonly retryTuning: {
+        baseDelayMs?: number;
+        jitterMs?: number;
+        maxDelayMs?: number;
+        random?: () => number;
+    };
+    private readonly sleep: (ms: number) => Promise<void>;
 
-    constructor(apiKey: string, opts?: { requestTimeoutMs?: number }) {
+    constructor(apiKey: string, opts?: JulesClientOptions) {
         this.apiKey = apiKey;
         this.requestTimeoutMs =
             opts?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+        this.retries = opts?.retries ?? DEFAULT_RETRIES;
+        this.retryTuning = {
+            baseDelayMs: opts?.retryBaseDelayMs,
+            jitterMs: opts?.retryJitterMs,
+            maxDelayMs: opts?.retryMaxDelayMs,
+            random: opts?.random,
+        };
+        this.sleep = opts?.sleep ?? realSleep;
     }
 
     private async request<T>(
@@ -46,42 +85,85 @@ export class JulesClient {
         timeoutMs?: number,
     ): Promise<T> {
         const url = `${BASE_URL}${path}`;
-        const headers: Record<string, string> = {
-            'X-Goog-Api-Key': this.apiKey,
-        };
 
-        const init: RequestInit = {
-            method,
-            headers,
-            signal: AbortSignal.timeout(timeoutMs ?? this.requestTimeoutMs),
-        };
+        // A fresh timeout signal per attempt: an AbortSignal.timeout that has
+        // already fired stays aborted, so reusing one would make every retry
+        // abort instantly.
+        for (let attempt = 0; ; attempt++) {
+            const headers: Record<string, string> = {
+                'X-Goog-Api-Key': this.apiKey,
+            };
+            const timeoutSignal = AbortSignal.timeout(
+                timeoutMs ?? this.requestTimeoutMs,
+            );
+            const init: RequestInit = {
+                method,
+                headers,
+                signal: timeoutSignal,
+            };
 
-        if (body) {
-            headers['Content-Type'] = 'application/json';
-            init.body = JSON.stringify(body);
+            if (body) {
+                headers['Content-Type'] = 'application/json';
+                init.body = JSON.stringify(body);
+            }
+
+            let response: Response;
+            try {
+                response = await fetch(url, init);
+            } catch (err) {
+                // A timeout is our own deadline, not the server's advice, and
+                // is never retried. Anything else that throws out of fetch is a
+                // transport failure — ambiguous, so idempotent methods only.
+                const timeout =
+                    timeoutSignal.aborted ||
+                    (err as Error | undefined)?.name === 'TimeoutError';
+                const plan = planRetry({
+                    method,
+                    timeout,
+                    networkError: err instanceof TypeError,
+                    attempt,
+                    maxRetries: this.retries,
+                    ...this.retryTuning,
+                });
+                if (!plan.retry) throw err;
+                await this.sleep(plan.delayMs);
+                continue;
+            }
+
+            if (!response.ok) {
+                const plan = planRetry({
+                    method,
+                    status: response.status,
+                    retryAfterSeconds: parseRetryAfterSeconds(
+                        response.headers.get('retry-after'),
+                    ),
+                    attempt,
+                    maxRetries: this.retries,
+                    ...this.retryTuning,
+                });
+                if (plan.retry) {
+                    await this.sleep(plan.delayMs);
+                    continue;
+                }
+                await this.handleError(response, path);
+            }
+
+            // DELETE returns google.protobuf.Empty — the body may be `{}` or empty.
+            if (method === 'DELETE') {
+                return undefined as T;
+            }
+
+            // `:sendMessage` also returns google.protobuf.Empty, and a completely
+            // empty body is not parseable JSON. Parsing it threw AFTER the request
+            // had already succeeded, which surfaced to callers as a failed call for
+            // an action that actually happened (#30). Treat an empty body as an
+            // empty result rather than an error.
+            const text = await response.text();
+            if (text.trim() === '') {
+                return undefined as T;
+            }
+            return JSON.parse(text) as T;
         }
-
-        const response = await fetch(url, init);
-
-        if (!response.ok) {
-            await this.handleError(response, path);
-        }
-
-        // DELETE returns google.protobuf.Empty — the body may be `{}` or empty.
-        if (method === 'DELETE') {
-            return undefined as T;
-        }
-
-        // `:sendMessage` also returns google.protobuf.Empty, and a completely
-        // empty body is not parseable JSON. Parsing it threw AFTER the request
-        // had already succeeded, which surfaced to callers as a failed call for
-        // an action that actually happened (#30). Treat an empty body as an
-        // empty result rather than an error.
-        const text = await response.text();
-        if (text.trim() === '') {
-            return undefined as T;
-        }
-        return JSON.parse(text) as T;
     }
 
     private async handleError(

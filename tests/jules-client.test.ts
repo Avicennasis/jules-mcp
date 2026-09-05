@@ -217,6 +217,19 @@ describe('JulesClient', () => {
     });
 
     describe('error handling', () => {
+        // Retries OFF here on purpose. These assert STATUS -> TYPED ERROR
+        // mapping, and the retrying client (default since #50643) replays a 429
+        // before mapping it — which would leave these testing the retry loop
+        // instead. Two of them silently passed for the wrong reason when the
+        // retry landed: the mock ran out on the second attempt, the client
+        // threw a TypeError, and `err.retryAfter` was undefined on THAT, which
+        // is what the assertion wanted. Retry behaviour is covered in
+        // `JulesClient retry` below.
+        let client: JulesClient;
+        beforeEach(() => {
+            client = new JulesClient('test-api-key', { retries: 0 });
+        });
+
         it('throws JulesAuthError on 401', async () => {
             mockFetch.mockResolvedValueOnce(
                 jsonResponse({ error: 'unauth' }, 401),
@@ -321,5 +334,193 @@ describe('request timeout (B1-118)', () => {
 
         expect(timeoutSpy).toHaveBeenCalledWith(120_000);
         timeoutSpy.mockRestore();
+    });
+});
+
+// --- Retry (#50643, consolidating #50416 / #50447 / #50451 / #50461) ---
+//
+// The pure policy is covered in tests/retry.test.ts. These assert the CLIENT
+// actually routes through it: that the method reaching planRetry is the real
+// one, that the sleep really happens, and that an exhausted retry still maps to
+// the same typed error the non-retrying client produced.
+//
+// The discriminating pair is (429, POST) retried and (503, POST) not. A client
+// that passed a hardcoded 'GET' to the policy would retry both and pass every
+// other assertion here.
+
+describe('JulesClient retry', () => {
+    let slept: number[];
+    const retrying = (retries = 2) =>
+        new JulesClient('test-api-key', {
+            retries,
+            retryBaseDelayMs: 100,
+            retryJitterMs: 0,
+            random: () => 0,
+            sleep: async (ms: number) => {
+                slept.push(ms);
+            },
+        });
+
+    beforeEach(() => {
+        vi.resetAllMocks();
+        slept = [];
+    });
+
+    it('retries a 429 on POST /sessions — rejected means not processed', async () => {
+        mockFetch
+            .mockResolvedValueOnce(jsonResponse({ error: 'slow down' }, 429))
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        const session = await retrying().createSession({
+            prompt: 'p',
+            sourceContext: { source: 'sources/github/o/r' },
+        });
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(session.name).toBe('sessions/1');
+    });
+
+    it('does NOT retry a 503 on POST /sessions — it may already exist', async () => {
+        mockFetch.mockResolvedValue(jsonResponse({ error: 'boom' }, 503));
+
+        await expect(
+            retrying().createSession({
+                prompt: 'p',
+                sourceContext: { source: 'sources/github/o/r' },
+            }),
+        ).rejects.toThrow();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries a 503 on GET', async () => {
+        mockFetch
+            .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, 503))
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        const session = await retrying().getSession('sessions/1');
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(session.name).toBe('sessions/1');
+    });
+
+    it('sleeps between attempts, backing off exponentially', async () => {
+        mockFetch
+            .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, 503))
+            .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, 503))
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        await retrying().getSession('sessions/1');
+
+        expect(slept).toEqual([100, 200]);
+    });
+
+    it('honors Retry-After for the sleep duration', async () => {
+        mockFetch
+            .mockResolvedValueOnce(
+                jsonResponse({ error: 'slow down' }, 429, {
+                    'retry-after': '4',
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        await retrying().getSession('sessions/1');
+
+        expect(slept).toEqual([4000]);
+    });
+
+    it('throws the mapped error once the budget is spent', async () => {
+        mockFetch.mockResolvedValue(
+            jsonResponse({ error: 'slow down' }, 429, { 'retry-after': '2' }),
+        );
+
+        const err = await retrying(2)
+            .getSession('sessions/1')
+            .catch((e) => e);
+
+        expect(err).toBeInstanceOf(JulesRateLimitError);
+        expect(err.retryAfter).toBe(2);
+        expect(mockFetch).toHaveBeenCalledTimes(3); // 1 + 2 retries
+    });
+
+    it('retries a network error on GET but not on POST', async () => {
+        mockFetch
+            .mockRejectedValueOnce(new TypeError('fetch failed'))
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+        await retrying().getSession('sessions/1');
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+
+        vi.resetAllMocks();
+        mockFetch.mockRejectedValue(new TypeError('fetch failed'));
+        await expect(
+            retrying().createSession({
+                prompt: 'p',
+                sourceContext: { source: 'sources/github/o/r' },
+            }),
+        ).rejects.toThrow();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('never retries a timeout, even on GET', async () => {
+        mockFetch.mockRejectedValue(
+            new DOMException('timed out', 'TimeoutError'),
+        );
+
+        await expect(retrying().getSession('sessions/1')).rejects.toThrow();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(slept).toEqual([]);
+    });
+
+    // The discriminating one: a runtime that reports the deadline as a
+    // TypeError makes the request look like BOTH a timeout and a retryable
+    // network failure on an idempotent method. Timeout has to win. Without
+    // this the timeout rule is dead code — a bare timeout is already
+    // unretryable for want of any retryable signal.
+    it('never retries a timeout surfaced as a TypeError', async () => {
+        const err = new TypeError('fetch failed');
+        err.name = 'TimeoutError';
+        mockFetch.mockRejectedValue(err);
+
+        await expect(retrying().getSession('sessions/1')).rejects.toThrow();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(slept).toEqual([]);
+    });
+
+    // An AbortSignal.timeout that has already fired stays aborted forever, so
+    // a signal hoisted out of the retry loop would make attempt 2 abort on the
+    // spot. A mocked fetch ignores the signal, so nothing else in this file
+    // would notice.
+    it('gives each attempt a fresh timeout signal', async () => {
+        mockFetch
+            .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, 503))
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        await retrying().getSession('sessions/1');
+
+        const first = mockFetch.mock.calls[0][1].signal;
+        const second = mockFetch.mock.calls[1][1].signal;
+        expect(first).toBeInstanceOf(AbortSignal);
+        expect(second).toBeInstanceOf(AbortSignal);
+        expect(second).not.toBe(first);
+    });
+
+    it('defaults to retrying, so callers get it without opting in', async () => {
+        mockFetch
+            .mockResolvedValueOnce(jsonResponse({ error: 'boom' }, 503))
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        const client = new JulesClient('test-api-key', {
+            retryBaseDelayMs: 0,
+            retryJitterMs: 0,
+        });
+        const session = await client.getSession('sessions/1');
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(session.name).toBe('sessions/1');
+    });
+
+    it('retries: 0 disables it entirely', async () => {
+        mockFetch.mockResolvedValue(jsonResponse({ error: 'boom' }, 503));
+        await expect(retrying(0).getSession('sessions/1')).rejects.toThrow();
+        expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 });
