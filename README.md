@@ -17,7 +17,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 354 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 398 unit tests, smoke test against the live API.
 
 ---
 
@@ -63,7 +63,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 354 unit tests
+npm test           # 398 unit tests
 ```
 
 ## Configuration
@@ -175,6 +175,16 @@ A typical manual flow:
 5. Poll until `COMPLETED`; read outputs / the PR.
 
 Or skip the babysitting with **`jules_run_task`**, which does create → approve → wait for you.
+
+### States we do not recognise
+
+`v1alpha` moves, and the state vocabulary has moved with it. Older sessions carry `PENDING`, `RUNNING` and `AWAITING_USER_INPUT`; **both** `CANCELLED` and `CANCELED` spellings appear; `COMPLETED_UNKNOWN` shows up in the field. Four community clients surveyed produced four state lists and no two agree — several of the names are plainly guesses.
+
+So `SessionState` is an **open union**: any string is accepted, with completion offered for the ones we know. The polling in `jules_run_task` branches on "is this a state I recognise as still working?", not "is this state terminal?". An unrecognised state stops the poll and is reported **verbatim**, so a finished session under an unfamiliar name comes back at once instead of burning the 10-minute deadline and then being reported — wrongly — as a timeout. `timeout` means the deadline expired, and nothing else.
+
+Adding names to the list is not the fix and never will be; the default branch being safe is.
+
+One cost is worth knowing: an open union means `tsc` no longer catches a typo in a state comparison — `state === 'PAUSDE'` is simply never true, and the session it was meant to short-circuit polls to the deadline instead. A test asserts that every state literal compared against in `src/` is a name we recognise, which is what closes that gap.
 
 ## Reviewing what Jules did
 
@@ -333,7 +343,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (354 tests)
+npm test             # vitest run (398 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
