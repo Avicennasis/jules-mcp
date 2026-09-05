@@ -313,11 +313,14 @@ export function registerIssueTools(
                     reason,
                     payload: { repo, issue_number, denied_by: 'allowlist' },
                 });
+                // JulesAPIError, not GitHubError: nothing went wrong at
+                // GitHub, and nothing was even asked of it. This is our own
+                // policy refusing to create a session. Its toJSON() drops the
+                // `hint` field, so the remedy goes in the message.
                 return errorResponse(
-                    new GitHubError(
-                        `Repository "${repo}" is not on the JULES_ALLOWED_REPOS allowlist, so no session was created and the issue was not fetched.`,
+                    new JulesAPIError(
+                        `Repository "${repo}" is not on the JULES_ALLOWED_REPOS allowlist, so no session was created and the issue was not fetched. JULES_ALLOWED_REPOS is set to "${allowlist}" — add the repo (or an "owner/*" entry) to allow it, or unset the variable to remove the restriction.`,
                         403,
-                        `JULES_ALLOWED_REPOS is set to "${allowlist}". Add the repo (or an "owner/*" entry) to allow it, or unset the variable to remove the restriction.`,
                     ),
                 );
             }
