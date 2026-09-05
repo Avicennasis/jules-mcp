@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SessionState` is now an **open union**, and `jules_run_task` stops on states
+  it does not recognise instead of polling them to the deadline.
+
+    The poll loop used to continue on anything outside `TERMINAL_STATES`, which
+    was exactly `{COMPLETED, FAILED}`. A session in `CANCELED` or
+    `COMPLETED_UNKNOWN` is finished, matches none of the named short-circuits,
+    and so polled for the full 600s and was then reported as a `timeout` — the
+    caller waits ten minutes and is told the wrong thing. The loop now branches
+    on "is this a state I recognise as still working?", so the unknown case is
+    safe by construction.
+
+    `TERMINAL_STATES` gains `CANCELLED`, `CANCELED` (both spellings appear in
+    the field; matching one silently misses the other) and `COMPLETED_UNKNOWN`.
+    `LEGACY_SESSION_STATES` records `PENDING`, `RUNNING` and
+    `AWAITING_USER_INPUT`, kept apart from `SESSION_STATES` so that list stays
+    an honest statement of the documented vocabulary. `AWAITING_USER_INPUT` is
+    handled as the legacy alias of `AWAITING_USER_FEEDBACK`, and all six legacy
+    names have `describeState` entries marked as such.
+
+    Four surveyed clients gave four disagreeing state vocabularies with several
+    invented names, so the enumeration cannot be completed by collecting more of
+    them. `timeout` is now reserved for a genuine deadline expiry.
+
+    Redmine #50647, with evidence from #50777 and #50452.
+
 - Idempotency-aware automatic retry (`src/retry.ts`, wired into `JulesClient`).
   Two retries by default, exponential backoff with jitter, `Retry-After`
   honored.
