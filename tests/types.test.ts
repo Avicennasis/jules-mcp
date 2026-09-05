@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
     normalizeResourceName,
     TERMINAL_STATES,
@@ -153,5 +155,61 @@ describe('isActiveState — the predicate the poll loop branches on', () => {
         '',
     ])('an unrecognised state (%s) is NOT active', (state) => {
         expect(isActiveState(state)).toBe(false);
+    });
+});
+
+// --- Every state literal in src/ must be a state we know (#50777) ---
+//
+// Opening the SessionState union bought a safe unknown-state branch and COST
+// the typo protection a closed union gave for free: `state === 'PAUSDE'` is no
+// longer a type error, it is just a comparison that is never true, and the
+// session it was meant to short-circuit silently polls to the deadline instead.
+//
+// #50777's third criterion — "any state literal in our source is derived from
+// SESSION_STATES, never hand-written at a use site" — exists for exactly that.
+// Rather than route every comparison through a constant, this asserts the
+// property structurally: whatever literal a use site compares `state` against,
+// it must be a name we recognise.
+
+describe('state literals used in src/', () => {
+    const SRC = join(import.meta.dirname, '..', 'src');
+
+    function tsFilesUnder(dir: string): string[] {
+        return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const full = join(dir, entry.name);
+            if (entry.isDirectory()) return tsFilesUnder(full);
+            return entry.isFile() && entry.name.endsWith('.ts') ? [full] : [];
+        });
+    }
+
+    /** Every `state === 'X'` / `state !== 'X'` literal across src/. */
+    function stateComparisonLiterals(): { file: string; literal: string }[] {
+        const found: { file: string; literal: string }[] = [];
+        for (const file of tsFilesUnder(SRC)) {
+            const src = readFileSync(file, 'utf8');
+            for (const m of src.matchAll(
+                /\bstate\s*[=!]==?\s*'([A-Z][A-Z0-9_]*)'/g,
+            )) {
+                found.push({ file, literal: m[1]! });
+            }
+        }
+        return found;
+    }
+
+    it('finds the comparisons at all — guard against a vacuous pass', () => {
+        // If the regex stops matching (a refactor to a switch, say), an empty
+        // set would make the assertion below pass while checking nothing.
+        expect(stateComparisonLiterals().length).toBeGreaterThanOrEqual(4);
+    });
+
+    it('compares only against known state names', () => {
+        const known = new Set<string>([
+            ...SESSION_STATES,
+            ...LEGACY_SESSION_STATES,
+        ]);
+        const unknown = stateComparisonLiterals().filter(
+            (c) => !known.has(c.literal),
+        );
+        expect(unknown).toEqual([]);
     });
 });
