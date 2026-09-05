@@ -1,18 +1,13 @@
 #!/usr/bin/env node
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { JulesClient } from './jules-client.js';
 import { ScheduleStore } from './scheduler/persistence.js';
 import { ScheduleManager } from './scheduler/cron.js';
 import { SourceConfigStore } from './source-config.js';
-import { registerSourceTools } from './tools/sources.js';
-import { registerSessionTools } from './tools/sessions.js';
-import { registerActivityTools } from './tools/activities.js';
-import { registerSchedulingTools } from './tools/scheduling.js';
-import { registerConvenienceTools } from './tools/convenience.js';
-import { registerDiffTools } from './tools/diff.js';
-import { VERSION } from './version.js';
+import { createJulesMcpServer } from './server-factory.js';
+import { loadHttpConfig, resolveTransportMode } from './http/config.js';
+import { startHttpTransport } from './http/server.js';
 
 const apiKey = process.env.JULES_API_KEY;
 if (!apiKey) {
@@ -24,41 +19,54 @@ if (!apiKey) {
 
 const encryptionKey = process.env.JULES_ENCRYPTION_KEY;
 
-const server = new McpServer({
-    name: 'jules-mcp',
-    // Read from package.json, never restated here (#50713). The literal that
-    // used to live on this line was left at 0.4.0 through three releases, so
-    // every client's initialize response reported a version that had not
-    // existed since 2026-06. See src/version.ts.
-    version: VERSION,
-});
-
 const client = new JulesClient(apiKey);
 const store = new ScheduleStore(encryptionKey);
 const manager = new ScheduleManager(store, client);
 const sourceConfig = new SourceConfigStore();
-
-// Register all tools
-registerSourceTools(server, client, sourceConfig);
-registerSessionTools(server, client);
-registerActivityTools(server, client);
-registerSchedulingTools(server, manager);
-registerConvenienceTools(server, client);
-registerDiffTools(server, client);
+const deps = { client, manager, sourceConfig };
 
 // Start scheduler
 manager.start();
 
-// Connect transport
-const transport = new StdioServerTransport();
-await server.connect(transport);
+// Transport selection. stdio is the default and is unchanged: `npm start`
+// with no new environment variables behaves exactly as it did before the HTTP
+// transport existed (#50638). HTTP is opt-in via JULES_MCP_TRANSPORT=http or
+// --transport http, and refuses to start without JULES_MCP_HTTP_TOKEN.
+let shutdown: () => Promise<void>;
+
+try {
+    const mode = resolveTransportMode(process.env, process.argv.slice(2));
+
+    if (mode === 'http') {
+        const config = loadHttpConfig(process.env);
+        const handle = await startHttpTransport({
+            config,
+            createServer: () => createJulesMcpServer(deps),
+        });
+        shutdown = async () => {
+            manager.stop();
+            await handle.close();
+        };
+    } else {
+        const server = createJulesMcpServer(deps);
+        await server.connect(new StdioServerTransport());
+        shutdown = async () => {
+            manager.stop();
+            await server.close();
+        };
+    }
+} catch (error) {
+    console.error(
+        `jules-mcp: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+}
 
 // Graceful shutdown
-async function shutdown() {
-    manager.stop();
-    await server.close();
+async function onSignal() {
+    await shutdown();
     process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', onSignal);
+process.on('SIGTERM', onSignal);

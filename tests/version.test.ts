@@ -68,21 +68,35 @@ describe('serverInfo version', () => {
         expect(VERSION).toBe(pkg.version);
     });
 
-    it('is the value index.ts hands to McpServer, with no literal beside it', () => {
+    it('is the value the server factory hands to McpServer, with no literal beside it', () => {
         // Closes the gap between "the module is correct" and "the server uses
         // it". A source-level assertion, not a live handshake: it cannot prove
         // the built server reports VERSION, only that nothing re-hardcodes the
         // number on its way there. That is the failure #50713 was.
-        const index = readFileSync(join(ROOT, 'src', 'index.ts'), 'utf8');
+        //
+        // The construction moved from index.ts to server-factory.ts under
+        // #50638, when the HTTP transport needed to build a server per MCP
+        // session from the same registration code the stdio transport uses.
+        // This guard follows it: the file asserted against must be the one
+        // that calls `new McpServer`, or it stops guarding anything.
+        const factory = readFileSync(
+            join(ROOT, 'src', 'server-factory.ts'),
+            'utf8',
+        );
 
-        expect(index).toMatch(/version:\s*VERSION\b/);
-        expect(index).toMatch(/from '\.\/version\.js'/);
+        expect(factory).toMatch(/new McpServer\(/);
+        expect(factory).toMatch(/version:\s*VERSION\b/);
+        expect(factory).toMatch(/from '\.\/version\.js'/);
 
         // Guard the guard: strip comments first, so the ticket's own narration
         // about the old 0.4.0 literal cannot trip this.
-        const code = index
+        const code = factory
             .replace(/\/\*[\s\S]*?\*\//g, '')
             .replace(/^\s*\/\/.*$/gm, '');
         expect(code).not.toMatch(/version:\s*['"`]/);
+
+        // ...and index.ts must not have grown a second McpServer of its own.
+        const index = readFileSync(join(ROOT, 'src', 'index.ts'), 'utf8');
+        expect(index).not.toMatch(/new McpServer\(/);
     });
 });

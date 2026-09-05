@@ -371,9 +371,67 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
 
     Redmine **#50643**, resolving the open question in **#50447**.
 
+### Streamable-HTTP transport, and the three patterns it must not copy
+
+Redmine **#50638**, with negative knowledge from **#50652** and **#50775**.
+
+The transport itself is small: one endpoint, `POST` for JSON-RPC, `GET`
+answered with 405, `DELETE` for teardown. Almost all of the design work went
+into what it refuses to do, because three community Jules servers had already
+demonstrated the failure modes.
+
+**Rejected: dispatching from a namespace lookup.** `cavuminfundo/jules-mcp-server`
+(#50652) resolves a tool call with `tool_fn = globals().get(tool_name)` and
+invokes it with attacker-supplied keyword arguments. The lookup is the module's
+entire global namespace, not a registry of MCP tools, so any module-scope
+callable is reachable — remote arbitrary-function-call behind an unauthenticated
+`0.0.0.0:8000` listener, with `except Exception: pass` around it so failed
+probing is silent. We dispatch from the SDK's explicit tool registry, built in
+one place (`src/server-factory.ts`) for both transports.
+`tests/http/registry.test.ts` asserts that a non-tool name is rejected rather
+than invoked, and that no Jules call is made when it is.
+
+**Rejected: a lenient fallback path.** The same repo's
+`CatchAllMessagesFallbackMiddleware` exists to keep working when an SSE session
+id is expired rather than returning 404 — and in being lenient about session
+ids it skips session validation entirely. There is exactly one route into
+dispatch here, an unknown `Mcp-Session-Id` is a 404, and there is no
+convenience branch around it.
+
+**Rejected: unauthenticated HTTP in front of the API key.**
+`Scarmonit/antigravity-jules-orchestration` (#50775) deployed a public
+`POST /mcp/execute` with no inbound auth that forwarded request bodies straight
+into `julesClient.post('/sessions', …)` with the deployer's own key.
+Authentication here is unconditional and precedes dispatch; there is no
+unauthenticated mode to configure, and the server refuses to start without a
+token.
+
+**Rejected: treating a loopback bind as an authentication decision.** The
+ticket as originally filed said "authentication required when not bound to
+loopback". Its journal note revised that after #50662: `socat` relays
+re-originate connections, so a backend behind one sees `127.0.0.1` as the peer
+for every relayed request and any "is the caller local?" check answers yes for
+the whole tailnet. Nothing in `src/http/guards.ts` reads a peer address.
+`bindsBeyondLoopback` exists only to print an operator warning, and a mutation
+that makes the token optional for a loopback bind is killed by
+`tests/http/config.test.ts`.
+
+**Rejected: wildcard CORS.** `Access-Control-Allow-Origin: *` on an endpoint
+holding a Jules API key (the reference implementation, #50638) is refused at
+config load. The allowlist is exact-match and empty by default, so any request
+carrying an `Origin` is rejected unless it was named.
+
+**Accepted from the reference** (`Rahul7562/jules-mcp-server`, MIT —
+LICENSE read directly, ideas only, no code copied): the 405-for-GET insight,
+and the shape of keeping the transport a thin module over the same tool
+implementation the stdio server uses. One correction to the ticket: the SDK's
+own `StreamableHTTPServerTransport` does *not* return 405 for GET — its
+`handleGetRequest` opens an SSE stream — so the 405 has to come from our handler
+ahead of it.
+
 ## Future Considerations
 
-- **Remote HTTP deployment** for broader distribution (Cloudflare Workers or similar)
+- **Remote HTTP deployment** for broader distribution (Cloudflare Workers or similar) — the transport exists (#50638) but is deliberately localhost-and-token only; remote exposure needs per-tool authorization and rate limiting first
 - **Bulk operations**: create multiple sessions from a list of tasks
 - **Source auto-discovery**: if only one source exists, auto-select it in `create_session`
 - **MCP app widgets**: rich session status dashboard, plan review UI
