@@ -17,7 +17,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 264 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 294 unit tests, smoke test against the live API.
 
 ---
 
@@ -33,6 +33,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Reviewing what Jules did](#reviewing-what-jules-did)
 - [Reworking a Jules PR — read this before you force-push](#reworking-a-jules-pr--read-this-before-you-force-push)
 - [Scheduling recurring tasks](#scheduling-recurring-tasks)
+- [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts)
 - [Audit logging](#audit-logging)
 - [Jules API quirks worth knowing](#jules-api-quirks-worth-knowing)
 - [Project layout](#project-layout)
@@ -62,7 +63,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 264 unit tests
+npm test           # 294 unit tests
 ```
 
 ## Configuration
@@ -248,6 +249,25 @@ Schedules persist to `~/.local/share/jules-mcp/schedules.enc`, **encrypted with 
 
 > **Security note — auto-generated key.** When `JULES_ENCRYPTION_KEY` is unset, the auto-generated key is persisted as plaintext hex at `~/.local/share/jules-mcp/.key` (file mode `0600`, directory `0700`, re-tightened on every load). That protects against other unprivileged users, but anyone who can read your home directory — root, backup processes, or a misconfigured share — can decrypt `schedules.enc` with it. On multi-user or shared systems, set `JULES_ENCRYPTION_KEY` from your secret manager instead so the key never touches disk. Schedule entries can contain prompts and repo names; treat them accordingly.
 
+## Fencing untrusted text in prompts
+
+Anything you interpolate into a Jules prompt from a source someone else can write — a GitHub issue body, a PR description, a comment thread, a commit message — is an instruction channel into an agent that has repo write access. `src/untrusted.ts` fences it.
+
+```ts
+import { buildFencedPrompt } from './untrusted.js';
+
+const prompt = buildFencedPrompt('Fix the bug described below.', [
+    { label: 'ISSUE_TITLE', content: issue.title },
+    { label: 'ISSUE_BODY', content: issue.body },
+]);
+```
+
+Each field is wrapped in `<<<BEGIN <LABEL> <NONCE>>>>` / `<<<END <LABEL> <NONCE>>>>` markers, where the nonce is 96 bits of CSPRNG output minted **at prompt-build time** — after whoever wrote the untrusted content wrote it. That is the whole defence: an attacker cannot close a fence whose label did not exist when they were typing. The prompt opens with framing that tells the model the fenced regions are inert data, that instructions inside them are never to be followed, and that a marker carrying a different token is forged.
+
+**The content is passed through byte-identical.** No NFKC normalization, no stripping, no neutralizing of phrases like "ignore previous instructions" — the fence is lossless on purpose. Rewriting the payload would have to enumerate every escape correctly to be sound, and it mangles legitimate text: a security advisory, a diff, or a code block quoting those phrases comes out altered. (Stripping zero-width/bidi/ANSI characters is still worth doing for _display_ safety. It is a different job; do not fold it into the fence.)
+
+> **Scope limit — fencing closes the first hop only.** Jules fetches URLs it finds in a prompt (measured 2026-08-31, above). A URL inside a fenced block therefore still reaches Jules through a channel the fence does not touch: the fence governs what we _send_, not what Jules _retrieves_. The framing asks the model not to follow those links, which is a request, not a control. Anything built on attacker-writable text needs a scope bound as well — restrict which repos a session may write to, and prefer stopping at a reviewable patch (`jules_pull_session`) over `AUTO_CREATE_PR`.
+
 ## Audit logging
 
 Every mutation can emit an audit record describing what happened and _why_ (the required `reason`):
@@ -291,6 +311,7 @@ src/
 ├── formatters.ts         # human-readable output (sessions, activities, diffs, patches)
 ├── audit.ts              # inkwell-emit wrapper + JSONL fallback
 ├── source-config.ts      # local per-source metadata store (suggestions, notes)
+├── untrusted.ts          # nonce-fenced envelopes for untrusted prompt input
 ├── scheduler/
 │   ├── cron.ts           # node-cron manager
 │   └── persistence.ts    # AES-256-GCM encrypted schedule store
@@ -311,7 +332,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (264 tests)
+npm test             # vitest run (294 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)

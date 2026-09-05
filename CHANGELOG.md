@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Nonce-fenced envelopes for untrusted text entering a prompt (`src/untrusted.ts`:
+  `makeNonce`, `fence`, `buildFencedPrompt`). Externally-sourced values — a
+  GitHub issue body, a PR description, a comment thread — are wrapped in
+  symmetric `<<<BEGIN <LABEL> <NONCE>>>>` / `<<<END <LABEL> <NONCE>>>>` markers
+  carrying 96 bits of CSPRNG output minted at prompt-build time, with framing
+  that tells the model the fenced regions are inert data.
+
+    The defence is timing, not escaping: the nonce is minted after the untrusted
+    author wrote their content, so no payload can carry a marker that closes the
+    fence. Content is therefore passed through **byte-identical** — no NFKC
+    normalization, no phrase neutralization — which is what keeps a diff, a code
+    block or a security advisory quoting "ignore previous instructions" intact.
+    Adapted from `maxi-tools/maxi-reviewer` (MIT).
+
+    Fencing closes the first hop only. Jules fetches URLs found in a prompt
+    (measured 2026-08-31), so a link inside a fenced block still reaches it
+    through a channel the fence does not touch; see README's "Fencing untrusted
+    text in prompts" for what to pair it with.
+
+    Redmine #50644.
+
 - Pinned base commit surfaced in change summaries. `ChangeSummary` now carries
   `baseCommitId`, and `changeSummaryLine` renders it as `base <sha7>`, so
   `jules_list_sessions(detect_changes: true)` shows the commit each session
