@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
     Each template's advertised arguments are **derived by scanning its own body**
     for placeholder tokens, rather than declared beside it. Adding `<TIMEOUT>` to
-    a body *is* adding a `TIMEOUT` argument, so the template and its schema
+    a body _is_ adding a `TIMEOUT` argument, so the template and its schema
     cannot drift apart — the same class of defect as the README count drift in
     #50462/#50463, fixed the same way. Two token forms: `<NAME>` for an
     operator-supplied identifier, `[[NAME]]` for externally-sourced text, which

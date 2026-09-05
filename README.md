@@ -14,7 +14,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 ```
 
 - **19 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a patch extractor, a consolidated diff viewer, and local source configuration.
-- **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are *derived from its own text*, so the two cannot drift apart.
+- **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are _derived from its own text_, so the two cannot drift apart.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
@@ -165,15 +165,15 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 **7 prompts**, in two kinds. A `task` prompt renders text destined for the `prompt` argument of `jules_create_session` / `jules_run_task`; an `operation` prompt is a workflow that drives this server's own tools.
 
-| Prompt                     | Kind      | What it does                                                                        | Arguments                                                                  |
-| -------------------------- | --------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `add-tests-for-module`     | task      | Cover one module with tests that each fail when the behaviour they assert is removed | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                  |
-| `fix-failing-ci`           | task      | Diagnose a CI failure from its log and fix the mechanism, smallest change first      | `WORKFLOW_NAME`, `FAILURE_LOG` ⚠, `SOURCE`, `STARTING_BRANCH`               |
+| Prompt                     | Kind      | What it does                                                                         | Arguments                                                                        |
+| -------------------------- | --------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `add-tests-for-module`     | task      | Cover one module with tests that each fail when the behaviour they assert is removed | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                       |
+| `fix-failing-ci`           | task      | Diagnose a CI failure from its log and fix the mechanism, smallest change first      | `WORKFLOW_NAME`, `FAILURE_LOG` ⚠, `SOURCE`, `STARTING_BRANCH`                    |
 | `upgrade-dependency`       | task      | Move one package to a target version and adapt only the forced call sites            | `PACKAGE_NAME`, `TARGET_VERSION`, `RELEASE_NOTES` ⚠, `SOURCE`, `STARTING_BRANCH` |
-| `refactor-for-readability` | task      | Restructure a module behind an unchanged interface, keeping rationale comments       | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                  |
-| `write-missing-docs`       | task      | Derive docs from the code, treating existing prose as a claim to verify              | `MODULE_PATH`, `DOC_FILE`, `SOURCE`, `STARTING_BRANCH`                      |
-| `triage-stale-sessions`    | operation | Classify sessions idle past a threshold; archive the ones you name back              | `STALE_AFTER_HOURS`                                                        |
-| `review-session-diff`      | operation | Read a session patch hunk by hunk and return an approve / revise / reject verdict    | `SESSION_ID`                                                               |
+| `refactor-for-readability` | task      | Restructure a module behind an unchanged interface, keeping rationale comments       | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                       |
+| `write-missing-docs`       | task      | Derive docs from the code, treating existing prose as a claim to verify              | `MODULE_PATH`, `DOC_FILE`, `SOURCE`, `STARTING_BRANCH`                           |
+| `triage-stale-sessions`    | operation | Classify sessions idle past a threshold; archive the ones you name back              | `STALE_AFTER_HOURS`                                                              |
+| `review-session-diff`      | operation | Read a session patch hunk by hunk and return an approve / revise / reject verdict    | `SESSION_ID`                                                                     |
 
 ⚠ marks an argument that carries **externally-sourced text**. Those are nonce-fenced with `src/untrusted.ts` before they reach the rendered prompt — see [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts).
 
@@ -184,7 +184,7 @@ A template body carries two kinds of placeholder:
 - `<NAME>` — an operator-supplied identifier (a path, a branch, a package name). Substituted inline.
 - `[[NAME]]` — externally-sourced text (a CI log, release notes). Substituted into a nonce fence, with the token itself replaced by a pointer to that fenced block.
 
-`prompts/list` builds each prompt's `arguments` by **scanning its own body for those tokens**. There is no second list to keep in step: adding `<TIMEOUT>` to a body *is* adding a `TIMEOUT` argument, and the fencing decision for a value follows from the token form rather than from a table someone has to remember to update. The idea comes from [`melbinjp/jules-prompts`](https://github.com/melbinjp/jules-prompts) (MIT); the implementation here is our own.
+`prompts/list` builds each prompt's `arguments` by **scanning its own body for those tokens**. There is no second list to keep in step: adding `<TIMEOUT>` to a body _is_ adding a `TIMEOUT` argument, and the fencing decision for a value follows from the token form rather than from a table someone has to remember to update. The idea comes from [`melbinjp/jules-prompts`](https://github.com/melbinjp/jules-prompts) (MIT); the implementation here is our own.
 
 Every argument is optional, so `prompts/get` with no arguments is a **preview**: unfilled placeholders render as themselves rather than erroring, through the same substitution path a filled render uses.
 
