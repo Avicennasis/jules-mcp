@@ -13,11 +13,11 @@ Built on the **official** Jules REST API (`v1alpha`) with CLI-inspired features 
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **19 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a patch extractor, a consolidated diff viewer, and local source configuration.
+- **20 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 398 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 458 unit tests, smoke test against the live API.
 
 ---
 
@@ -34,6 +34,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Reworking a Jules PR — read this before you force-push](#reworking-a-jules-pr--read-this-before-you-force-push)
 - [Scheduling recurring tasks](#scheduling-recurring-tasks)
 - [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts)
+- [Starting a task from a GitHub issue](#starting-a-task-from-a-github-issue)
 - [Audit logging](#audit-logging)
 - [Jules API quirks worth knowing](#jules-api-quirks-worth-knowing)
 - [Project layout](#project-layout)
@@ -63,17 +64,19 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 398 unit tests
+npm test           # 458 unit tests
 ```
 
 ## Configuration
 
-The server reads two environment variables:
+The server reads these environment variables:
 
 | Variable               | Required | Purpose                                                                                                                                                                                                                                                                                     |
 | ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                            |
 | `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling). |
+| `JULES_ALLOWED_REPOS`  | no       | Comma-separated allowlist of repositories `jules_create_session_from_issue` may target, supporting `owner/*` and a bare `*`. Unset means no restriction. Currently enforced on that tool only; extending it to every session-creating tool is tracked separately.                           |
+| `GITHUB_TOKEN`         | no       | Token used to read issues. `GH_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN` are accepted as fallbacks, in that order. Unset works fine for public repos at GitHub's anonymous 60 requests/hour; a token raises that to 5000 and is required for private repos. Read-only scope is enough.      |
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
@@ -109,7 +112,7 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ## Tool reference
 
-19 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
+20 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
@@ -149,11 +152,12 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Convenience & review
 
-| Tool                     | Description                                                                                                                                                                                                             | Key params                                                                                                                                                                         |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_run_task` ✎       | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag. | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10) |
-| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).     | `session_id`, `summary?`                                                                                                                                                           |
-| `jules_pull_session`     | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                 | `session_id`                                                                                                                                                                       |
+| Tool                                  | Description                                                                                                                                                                                                             | Key params                                                                                                                                                                                                                                                 |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` ✎                    | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag. | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10)                                                                         |
+| `jules_get_session_diff`              | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).     | `session_id`, `summary?`                                                                                                                                                                                                                                   |
+| `jules_pull_session`                  | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                 | `session_id`                                                                                                                                                                                                                                               |
+| `jules_create_session_from_issue` ✎🔍 | Turn a GitHub issue into a Jules task: fetch title, body, labels and the comment thread, fence all of it, and create a session. **`AUTO_CREATE_PR` is off unless you opt in** — see below.                              | `repo` (`owner/repo`), `issue_number`, `reason`, `source?`, `starting_branch?` (`main`), `title?`, `include_comments?` (true), `max_comments?` (100), `prompt_template?`, `allow_auto_create_pr?` (**false**), `require_plan_approval?` (true), `dry_run?` |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
 
@@ -280,6 +284,40 @@ Each field is wrapped in `<<<BEGIN <LABEL> <NONCE>>>>` / `<<<END <LABEL> <NONCE>
 
 > **Scope limit — fencing closes the first hop only.** Jules fetches URLs it finds in a prompt (measured 2026-08-31, above). A URL inside a fenced block therefore still reaches Jules through a channel the fence does not touch: the fence governs what we _send_, not what Jules _retrieves_. The framing asks the model not to follow those links, which is a request, not a control. Anything built on attacker-writable text needs a scope bound as well — restrict which repos a session may write to, and prefer stopping at a reviewable patch (`jules_pull_session`) over `AUTO_CREATE_PR`.
 
+## Starting a task from a GitHub issue
+
+`jules_create_session_from_issue` fetches an issue's title, body, labels and **comment thread**, fences every one of them, and creates a session from the result.
+
+```
+jules_create_session_from_issue(
+    repo = "Avicennasis/jules-mcp",
+    issue_number = 42,
+    reason = "triaging the crash report",
+    dry_run = true,          # compose the prompt, create nothing
+)
+```
+
+The comment thread is included by default because that is usually where the actual requirement lives — and it is also the whole reason the rest of this section exists. **On a public repository, anyone can open an issue and anyone can comment on one.** That text is being handed to an agent with write access to your repo.
+
+Three controls apply, in decreasing order of how much they are worth:
+
+1. **Scope — `JULES_ALLOWED_REPOS`.** Checked before GitHub is contacted at all, `dry_run` included. A bound on what the agent may _write_ outlives any amount of filtering of what it _reads_, which is why it is first. Unset means no restriction.
+2. **No auto-PR by default.** `automationMode` is left unset unless you pass `allow_auto_create_pr: true`, so the default run stops at a reviewable patch you read via `jules_pull_session` or `jules_get_session_diff`. Turning it on means a drive-by issue comment can reach an open PR with no human in between; only do it for a repo whose issues you trust. `require_plan_approval` also stays `true` — and note the plan gate carries forward across revisions (above).
+3. **Fencing.** Title, body, labels and comments each go into their own nonce fence (see the previous section) before they enter the prompt.
+
+> **What those three do not cover.** Jules fetches URLs it finds in a prompt (measured 2026-08-31, above). A bare link in an issue comment therefore still reaches Jules, through a channel the fence does not touch. Control 1 is what remains standing when that happens. Whether Jules follows links found _within_ a fetched page is still untested.
+
+Two smaller deliberate choices:
+
+- **The default session title is `Issue owner/repo#42`, not the issue's own title.** The number is the traceability the ticket asked for; the title is attacker-written text landing in a field whose rendering we do not control. Pass `title` if you want it anyway.
+- **The prompt template is replaceable, the fencing is not.** `prompt_template` substitutes `{repo}`, `{issue_number}` and `{issue_url}` and replaces the standing requirements along with everything else — if you bring your own instructions you own them. It cannot replace the security framing or the fences, which are applied around whatever it produces.
+
+**Reading the issue.** The server talks to `api.github.com` with the platform `fetch` — no Octokit, and no dependency on `gh` being installed or logged in. A token is read from `GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_PERSONAL_ACCESS_TOKEN`, and is never logged, never echoed into a prompt and never passed in argv. With none set, public repos still work at GitHub's anonymous 60 requests/hour.
+
+Comments are paged explicitly rather than left at GitHub's 30-row default, so an issue with 200 comments is not silently read as its first 30. `max_comments` (default 100) caps it, and whatever is left out is reported to the model in the part of the prompt _we_ author — never in the fenced part, where a comment could write its own disclaimer.
+
+One error worth recognising: **GitHub answers `404` for a repository you cannot see**, so a private repo and a nonexistent issue are indistinguishable from the outside. The error says so rather than implying you typed the number wrong.
+
 ## Audit logging
 
 Every mutation can emit an audit record describing what happened and _why_ (the required `reason`):
@@ -324,6 +362,7 @@ src/
 ├── audit.ts              # inkwell-emit wrapper + JSONL fallback
 ├── source-config.ts      # local per-source metadata store (suggestions, notes)
 ├── untrusted.ts          # nonce-fenced envelopes for untrusted prompt input
+├── github.ts             # read-only GitHub REST reader (issues + comments)
 ├── retry.ts              # idempotency-aware retry policy (backoff, jitter, Retry-After)
 ├── scheduler/
 │   ├── cron.ts           # node-cron manager
@@ -334,6 +373,7 @@ src/
     ├── activities.ts     # list, get
     ├── scheduling.ts     # schedule_task, list_schedules
     ├── convenience.ts    # run_task (with parallel mode)
+    ├── issues.ts         # create_session_from_issue (GitHub issue -> Jules task)
     └── diff.ts           # get_session_diff, pull_session
 scripts/
 ├── smoke-test.ts         # hits the live API (needs JULES_API_KEY)
@@ -345,7 +385,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (398 tests)
+npm test             # vitest run (458 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)

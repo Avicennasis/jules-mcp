@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `jules_create_session_from_issue` — turn a GitHub issue into a Jules task
+  (Redmine #50457). Fetches the issue title, body, labels and the **whole**
+  comment thread (paged explicitly, so a 200-comment issue is not silently read
+  as its first 30), fences every one of them with `src/untrusted.ts`, and
+  composes a session prompt. `dry_run` returns the composed prompt without
+  creating anything.
+
+    The input is attacker-writable — on a public repo anyone can open an issue
+    or comment on one — and Jules holds repo write access, so the defaults fail
+    closed. `AUTO_CREATE_PR` is **off** unless the caller passes
+    `allow_auto_create_pr: true`, leaving the default run stopping at a
+    reviewable patch; `require_plan_approval` stays on; and the new
+    `JULES_ALLOWED_REPOS` allowlist is checked before GitHub is contacted at
+    all, `dry_run` included. This resolves the question left open on #50644 in
+    the conservative direction — flagged here so it can be overruled
+    deliberately rather than by accident.
+
+    The session title defaults to `Issue owner/repo#N`, not the issue's own
+    title: the number is the traceability, the title is attacker-written text.
+
+- `src/github.ts` — a read-only GitHub reader built on the platform `fetch`. No
+  Octokit and no dependency on `gh` being installed or authenticated, so the
+  server behaves the same wherever its client runs. The token comes from
+  `GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_PERSONAL_ACCESS_TOKEN` and never
+  reaches argv, a log line or a prompt. `owner/repo` is validated against
+  GitHub's own name alphabet before it is interpolated into a URL path — the
+  #50421 lesson applied to a second API. A 404 error explains that GitHub
+  answers 404 for repos you cannot see, so a private repo and a missing issue
+  are indistinguishable.
+
 - `SessionState` is now an **open union**, and `jules_run_task` stops on states
   it does not recognise instead of polling them to the deadline.
 
