@@ -200,6 +200,30 @@ describe('JulesClient', () => {
             expect(opts.method).toBe('POST');
             expect(session.archived).toBe(false);
         });
+
+        // #50451: the empty-body guard must cover EVERY mutating endpoint, not
+        // just DELETE. `:archive` and `:unarchive` are undocumented, so their
+        // response shape is not contractual; a 204 must not become a JSON parse
+        // error thrown AFTER the mutation already landed — the #30 / #50828
+        // shape, where the caller sees a failure for an action that happened.
+        it.each([
+            ['archiveSession', (c: JulesClient) => c.archiveSession('abc')],
+            ['unarchiveSession', (c: JulesClient) => c.unarchiveSession('abc')],
+        ])('%s tolerates an empty 204 body', async (_name, call) => {
+            mockFetch.mockResolvedValueOnce(
+                new Response(null, { status: 204 }),
+            );
+            await expect(call(client)).resolves.toBeUndefined();
+        });
+
+        it('sendMessage tolerates an empty 204 body', async () => {
+            mockFetch.mockResolvedValueOnce(
+                new Response(null, { status: 204 }),
+            );
+            await expect(
+                client.sendMessage('abc', 'hello'),
+            ).resolves.toBeUndefined();
+        });
     });
 
     describe('deleteSession', () => {
