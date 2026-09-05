@@ -176,6 +176,8 @@ A typical manual flow:
 
 Or skip the babysitting with **`jules_run_task`**, which does create → approve → wait for you.
 
+> **The plan gate is on by default and discharged by default.** `jules_create_session` defaults `require_plan_approval` to `true`, and `jules_run_task` always creates with it set — but `run_task`'s `auto_approve` also defaults to `true`, so _we_ approve on your behalf and no human sees the plan. Pass `auto_approve: false` if you want it to stop and show you. And note approval **carries forward**: once a plan is approved, a revision executes straight through with no second `AWAITING_PLAN_APPROVAL`, so revise _before_ approving if the gate matters.
+
 ### States we do not recognise
 
 `v1alpha` moves, and the state vocabulary has moved with it. Older sessions carry `PENDING`, `RUNNING` and `AWAITING_USER_INPUT`; **both** `CANCELLED` and `CANCELED` spellings appear; `COMPLETED_UNKNOWN` shows up in the field. Four community clients surveyed produced four state lists and no two agree — several of the names are plainly guesses.

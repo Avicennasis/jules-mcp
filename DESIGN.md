@@ -296,8 +296,31 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
 
 ## Decisions (Resolved)
 
+> **Audited against the source 2026-09-05 (#50463).** Decision 2's claim about MCP
+> progress notifications was found false in 2026-08 — under a heading a future
+> implementer trusts more than an open TODO, which is what made it expensive. Every
+> other decision now carries the evidence it was checked against and the date, so the
+> next reader can tell a verified statement from an inherited one. Decision 5 was added
+> the same day and records a live conflict between two tickets rather than hiding it.
+
 1. **`require_plan_approval` defaults to `true`** — safer; Claude sees the plan before
-   Jules executes. Users can override per-session.
+   Jules executes. Users can override per-session. Verified 2026-09-05: `.default(true)`
+   on the zod schema in `src/tools/sessions.ts:56-58` and `src/tools/scheduling.ts:47-50`.
+
+    **Two things the original wording left out, both of which change what the default
+    buys you.** The literal claim is true; the safety it implies is narrower.
+
+    - **`jules_run_task` discharges the gate immediately by default.** It hardcodes
+      `requirePlanApproval: true` on creation (`convenience.ts:239`, `:341`) and then
+      exposes `auto_approve`, which **defaults to `true`** (`:178-181`). So Jules is
+      asked to pause, and we approve on its behalf without a human seeing the plan.
+      `auto_approve` controls whether _we_ approve, not whether Jules skips — pass
+      `auto_approve: false` if you want the plan to reach a person.
+    - **Approval carries forward across revisions**, measured against the live API on
+      2026-08-31 (#50640). Once a plan is approved, sending a revision produces a new
+      plan that executes straight through — no second `AWAITING_PLAN_APPROVAL`. The
+      gate is one-shot, not standing: **revise before approving** if it matters.
+
 2. **`jules_run_task` convenience tool included** — composite create+poll+approve for
    fire-and-forget usage, with `parallel` (1–10) fanning out N independent sessions.
    **NOT BUILT: MCP progress notifications.** This line used to assert we report
@@ -310,9 +333,12 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
    claim, grep the whole document for it rather than fixing the instance you found.
    Do not re-state this as done until #50418 closes.
 3. **v1alpha breakage** — #YOLO. Pin to v1alpha, move fast. If it breaks, we fix it.
-   No version-negotiation complexity.
+   No version-negotiation complexity. Verified 2026-09-05: one `BASE_URL` in
+   `src/jules-client.ts:18`, and no other API version string appears anywhere in `src/`.
 4. **Scheduling included** — in-process cron with encrypted persistence. Not everyone
-   has n8n or wants to set up external automation for recurring tasks.
+   has n8n or wants to set up external automation for recurring tasks. Verified
+   2026-09-05: `node-cron` imported in `src/scheduler/cron.ts:1`; `aes-256-gcm` via
+   `crypto.createCipheriv` in `src/scheduler/persistence.ts:9,56`.
 5. **Retries are idempotency-aware, and a request TIMEOUT is never retried** — a `429`
    replays for every method including `POST`; a `5xx` or network failure replays only
    for `GET`/`HEAD`/`OPTIONS`/`PUT`/`DELETE`. A 429 means the request was rejected
