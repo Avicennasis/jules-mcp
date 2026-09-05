@@ -313,6 +313,37 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
    No version-negotiation complexity.
 4. **Scheduling included** — in-process cron with encrypted persistence. Not everyone
    has n8n or wants to set up external automation for recurring tasks.
+5. **Retries are idempotency-aware, and a request TIMEOUT is never retried** — a `429`
+   replays for every method including `POST`; a `5xx` or network failure replays only
+   for `GET`/`HEAD`/`OPTIONS`/`PUT`/`DELETE`. A 429 means the request was rejected
+   without being processed; a 5xx or dropped socket is ambiguous, and Jules offers no
+   idempotency key, so replaying `POST /sessions` can double-create against a daily
+   quota whose ceiling is unmeasured (**#50428**).
+
+    **On timeouts specifically — this resolves a conflict between two tickets, and it
+    is worth naming rather than burying.** **#50447** (from `MikBin/jules-mcp`) asks for
+    "timeout retries permitted for idempotent reads only" and a test that a timing-out
+    read is retried. **#50643** (from `Yuuqq/jules-dispatch`) says a timeout is
+    "never retried", and its own filing designates it the reference implementation to
+    prefer at triage. We followed #50643.
+
+    The reasoning, so it can be overruled on its merits: the 30s deadline is _ours_, set
+    per request by the caller via `requestTimeoutMs`. Retrying a timed-out read spends
+    another full deadline the caller did not ask for — three attempts turn a stated 30s
+    bound into 90s inside a single MCP tool call, with no way for the client to see it
+    happening. A caller who wants longer should raise `requestTimeoutMs`, which says so
+    explicitly, rather than get it silently multiplied. A 429 or 5xx is the server
+    telling us something; a timeout is only us running out of patience.
+
+    The guard is about **precedence**, not the empty case: a bare timeout with no status
+    and no network flag is already unretryable for want of any retryable signal. It
+    earns its keep when a runtime surfaces the deadline as a `TypeError`, which
+    otherwise reads as a retryable network failure on an idempotent method.
+
+    If this decision is reversed, the change is one branch in `planRetry` plus its
+    precedence tests — see `src/retry.ts` and `tests/retry.test.ts`.
+
+    Redmine **#50643**, resolving the open question in **#50447**.
 
 ## Future Considerations
 

@@ -17,7 +17,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 294 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 354 unit tests, smoke test against the live API.
 
 ---
 
@@ -63,7 +63,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 294 unit tests
+npm test           # 354 unit tests
 ```
 
 ## Configuration
@@ -312,6 +312,7 @@ src/
 ├── audit.ts              # inkwell-emit wrapper + JSONL fallback
 ├── source-config.ts      # local per-source metadata store (suggestions, notes)
 ├── untrusted.ts          # nonce-fenced envelopes for untrusted prompt input
+├── retry.ts              # idempotency-aware retry policy (backoff, jitter, Retry-After)
 ├── scheduler/
 │   ├── cron.ts           # node-cron manager
 │   └── persistence.ts    # AES-256-GCM encrypted schedule store
@@ -332,7 +333,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (294 tests)
+npm test             # vitest run (354 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -353,6 +354,33 @@ The client maps HTTP failures to typed errors, and tools return a consistent sha
 | `JulesAPIError`       | any other non-2xx                                                   |
 
 Requests also carry a 30s timeout via `AbortSignal.timeout`.
+
+### Retries
+
+Failed requests are retried automatically — **twice by default**, with exponential backoff plus jitter, honoring `Retry-After` when the server sends it. What gets retried depends on whether replaying the request is safe:
+
+| Failure                 | `GET` / `HEAD` / `OPTIONS` / `PUT` / `DELETE` | `POST` / `PATCH` |
+| ----------------------- | --------------------------------------------- | ---------------- |
+| `429 Too Many Requests` | retried                                       | **retried**      |
+| `5xx`                   | retried                                       | not retried      |
+| Network failure         | retried                                       | not retried      |
+| Request timeout         | not retried                                   | not retried      |
+| Any other `4xx`         | not retried                                   | not retried      |
+
+A `429` means the request was **rejected without being processed**, so replaying it is safe for any method. A `5xx` or a dropped socket is **ambiguous** — the session may already have been created — and Jules offers no idempotency key, so replaying a `POST /sessions` can double-create and burn quota whose daily ceiling is unmeasured. A timeout is our own deadline expiring rather than the server's advice, so retrying it would multiply a wall-clock the caller already bounded.
+
+A `Retry-After` longer than `retryMaxDelayMs` (30s default) is **not** slept through — the error is surfaced with its `retryAfter` instead, because blocking an MCP tool call for an hour is worse than failing and letting the caller decide. Our own exponential term is clamped to that ceiling rather than declined.
+
+Tune or disable per client:
+
+```ts
+new JulesClient(key, {
+    retries: 0, // disable
+    retryBaseDelayMs: 500,
+    retryJitterMs: 250,
+    retryMaxDelayMs: 30_000,
+});
+```
 
 ## Roadmap
 

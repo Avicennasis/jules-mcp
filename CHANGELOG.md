@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Idempotency-aware automatic retry (`src/retry.ts`, wired into `JulesClient`).
+  Two retries by default, exponential backoff with jitter, `Retry-After`
+  honored.
+
+    **A `429` is retried for every method including `POST`; a `5xx` or network
+    failure only for idempotent ones.** A 429 means the request was rejected
+    without being processed, so replaying it is safe. A 5xx or a dropped socket
+    is ambiguous — the session may already exist — and Jules has no idempotency
+    key, so replaying a `POST /sessions` can double-create and burn quota with
+    no measured daily ceiling (#50428).
+
+    Timeouts are never retried: that is our own deadline, not the server's
+    advice. A `Retry-After` longer than `retryMaxDelayMs` (30s default) is
+    surfaced as an error rather than slept through, since blocking an MCP tool
+    call for an hour is worse than failing; the exponential term is clamped to
+    that ceiling instead.
+
+    Adapted from `Yuuqq/jules-dispatch` (MIT), the sharpest of the 26 community
+    implementations surveyed. Tunable per client via `retries`,
+    `retryBaseDelayMs`, `retryJitterMs`, `retryMaxDelayMs`; `retries: 0`
+    disables it.
+
+    Redmine #50643, consolidating #50416, #50447, #50451 and #50461.
+
 - Nonce-fenced envelopes for untrusted text entering a prompt (`src/untrusted.ts`:
   `makeNonce`, `fence`, `buildFencedPrompt`). Externally-sourced values — a
   GitHub issue body, a PR description, a comment thread — are wrapped in
