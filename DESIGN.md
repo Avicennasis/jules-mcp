@@ -63,16 +63,16 @@ Key states:
 
 ### Sessions (8 tools)
 
-| Tool                      | Jules API                         | Description                                                                                                                                                                                                                                               |
-| ------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_create_session`    | `POST /sessions`                  | Create a coding task. Params: `prompt` (required), `source` (required — source name), `starting_branch` (required), `title` (optional), `require_plan_approval` (optional, default **true**), `automation_mode` (optional — `AUTO_CREATE_PR` to auto-PR). |
-| `jules_list_sessions`     | `GET /sessions`                   | List sessions with pagination. Params: `page_size` (optional), `page_token` (optional).                                                                                                                                                                   |
-| `jules_get_session`       | `GET /sessions/{id}`              | Get session status, state, outputs. Use to poll progress or check for PR links.                                                                                                                                                                           |
-| `jules_approve_plan`      | `POST /sessions/{id}:approvePlan` | Approve a pending plan. Only valid when state is `AWAITING_PLAN_APPROVAL`.                                                                                                                                                                                |
-| `jules_send_message`      | `POST /sessions/{id}:sendMessage` | Send feedback/instructions to Jules. Used when state is `AWAITING_USER_FEEDBACK` or to provide additional context. Params: `message` (required).                                                                                                          |
-| `jules_archive_session`   | `POST /sessions/{id}:archive` ¹   | Archive (close out) a session and hide it from the active list. Reversible. Params: `reason` (required).                                                                                                                                                  |
-| `jules_unarchive_session` | `POST /sessions/{id}:unarchive` ¹ | Restore a previously archived session. Params: `reason` (required).                                                                                                                                                                                       |
-| `jules_delete_session`    | `DELETE /sessions/{id}` ¹         | Permanently delete a session (irreversible). Guarded by `confirm_destructive`. Params: `reason` (required), `confirm_destructive`.                                                                                                                        |
+| Tool                      | Jules API                         | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `jules_create_session`    | `POST /sessions`                  | Create a coding task. Params: `prompt` (required), `source` (required — source name), `starting_branch` (required), `title` (optional), `require_plan_approval` (optional, default **true**), `automation_mode` (optional — `AUTO_CREATE_PR` to auto-PR).                                                                                                                                                                                                                                                    |
+| `jules_list_sessions`     | `GET /sessions`                   | List sessions with pagination. Params: `page_size`, `page_token`, `max_pages` (auto-follow; default 1, or 10 with `source`, hard cap 20), `source`, `state`, `stale_only`, `compact`, `detect_changes`, `detect_duplicates` — all optional. Everything after `max_pages` filters **client-side over the pages fetched**, so a count is only a total once the response carries no `nextPageToken`. `detect_changes` (implied by `stale_only`) spends one `GET /sessions/{id}/activities` per matched session. |
+| `jules_get_session`       | `GET /sessions/{id}`              | Get session status, state, outputs. Use to poll progress or check for PR links.                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `jules_approve_plan`      | `POST /sessions/{id}:approvePlan` | Approve a pending plan. Only valid when state is `AWAITING_PLAN_APPROVAL`.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `jules_send_message`      | `POST /sessions/{id}:sendMessage` | Send feedback/instructions to Jules. Used when state is `AWAITING_USER_FEEDBACK` or to provide additional context. Params: `message` (required).                                                                                                                                                                                                                                                                                                                                                             |
+| `jules_archive_session`   | `POST /sessions/{id}:archive` ¹   | Archive (close out) a session and hide it from the active list. Reversible. Params: `reason` (required).                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `jules_unarchive_session` | `POST /sessions/{id}:unarchive` ¹ | Restore a previously archived session. Params: `reason` (required).                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `jules_delete_session`    | `DELETE /sessions/{id}` ¹         | Permanently delete a session (irreversible). Guarded by `confirm_destructive`. Params: `reason` (required), `confirm_destructive`.                                                                                                                                                                                                                                                                                                                                                                           |
 
 > ¹ **Undocumented endpoints.** The `:archive`, `:unarchive`, and `DELETE` operations are not listed in the [public Jules API reference](https://developers.google.com/jules/api) as of June 2026. They work reliably in practice but could change without notice. If they break, check the API docs for replacements before filing a bug.
 
@@ -296,8 +296,31 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
 
 ## Decisions (Resolved)
 
+> **Audited against the source 2026-09-05 (#50463).** Decision 2's claim about MCP
+> progress notifications was found false in 2026-08 — under a heading a future
+> implementer trusts more than an open TODO, which is what made it expensive. Every
+> other decision now carries the evidence it was checked against and the date, so the
+> next reader can tell a verified statement from an inherited one. Decision 5 was added
+> the same day and records a live conflict between two tickets rather than hiding it.
+
 1. **`require_plan_approval` defaults to `true`** — safer; Claude sees the plan before
-   Jules executes. Users can override per-session.
+   Jules executes. Users can override per-session. Verified 2026-09-05: `.default(true)`
+   on the zod schema in `src/tools/sessions.ts:56-58` and `src/tools/scheduling.ts:47-50`.
+
+    **Two things the original wording left out, both of which change what the default
+    buys you.** The literal claim is true; the safety it implies is narrower.
+
+    - **`jules_run_task` discharges the gate immediately by default.** It hardcodes
+      `requirePlanApproval: true` on creation (`convenience.ts:239`, `:341`) and then
+      exposes `auto_approve`, which **defaults to `true`** (`:178-181`). So Jules is
+      asked to pause, and we approve on its behalf without a human seeing the plan.
+      `auto_approve` controls whether _we_ approve, not whether Jules skips — pass
+      `auto_approve: false` if you want the plan to reach a person.
+    - **Approval carries forward across revisions**, measured against the live API on
+      2026-08-31 (#50640). Once a plan is approved, sending a revision produces a new
+      plan that executes straight through — no second `AWAITING_PLAN_APPROVAL`. The
+      gate is one-shot, not standing: **revise before approving** if it matters.
+
 2. **`jules_run_task` convenience tool included** — composite create+poll+approve for
    fire-and-forget usage, with `parallel` (1–10) fanning out N independent sessions.
    **NOT BUILT: MCP progress notifications.** This line used to assert we report
@@ -310,13 +333,106 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
    claim, grep the whole document for it rather than fixing the instance you found.
    Do not re-state this as done until #50418 closes.
 3. **v1alpha breakage** — #YOLO. Pin to v1alpha, move fast. If it breaks, we fix it.
-   No version-negotiation complexity.
+   No version-negotiation complexity. Verified 2026-09-05: one `BASE_URL` in
+   `src/jules-client.ts:18`, and no other API version string appears anywhere in `src/`.
 4. **Scheduling included** — in-process cron with encrypted persistence. Not everyone
-   has n8n or wants to set up external automation for recurring tasks.
+   has n8n or wants to set up external automation for recurring tasks. Verified
+   2026-09-05: `node-cron` imported in `src/scheduler/cron.ts:1`; `aes-256-gcm` via
+   `crypto.createCipheriv` in `src/scheduler/persistence.ts:9,56`.
+5. **Retries are idempotency-aware, and that now includes TIMEOUTS** — a `429`
+   replays for every method including `POST`; a `5xx`, a network failure, or a request
+   timeout replays only for `GET`/`HEAD`/`OPTIONS`/`PUT`/`DELETE`. A 429 means the
+   request was rejected without being processed; the other three are ambiguous, and
+   Jules offers no idempotency key, so replaying `POST /sessions` can double-create
+   against a daily quota whose ceiling is unmeasured (**#50428**).
+
+    **On timeouts specifically — this decision was reversed on 2026-09-06 and the
+    history is worth keeping.** **#50447** asked for "timeout retries permitted for
+    idempotent reads only". **#50643** said a timeout is "never retried", and its own
+    filing designated it the reference to prefer at triage, so it was followed first.
+
+    The argument for never-retrying was that the 30s deadline is _ours_, set per request
+    via `requestTimeoutMs`, and that replaying spends another full deadline the caller
+    did not ask for — three attempts turning a stated 30s bound into 90s invisibly.
+
+    **The operator overruled it, and the counter-argument is the better one:** a timeout
+    expiring on the client side says nothing about whether the server processed the
+    request. That is precisely the ambiguity a 5xx or a dropped socket presents, and it
+    already gets a well-reasoned answer here — retry the idempotent, never the rest. The
+    never-retry rule was treating a timeout as a _verdict_ when it is an _absence of
+    one_. A caller who cares about total wall-clock has two honest levers, `retries` and
+    `requestTimeoutMs`, both of which say what they do.
+
+    The `POST` half is unchanged and is the part that must not drift: a timed-out create
+    may already have landed. There is a precedence guard for it — a `429` arriving
+    alongside a timeout does **not** unlock the any-method fast path, because with no
+    response there is no server verdict to act on. Without that guard a predicate written
+    as `status === 429 || …` would retry the exact case the idempotency split exists to
+    prevent, and there is a test for it.
+
+    Redmine **#50447** (implemented) and **#50643** (its timeout clause superseded).
+
+### Streamable-HTTP transport, and the three patterns it must not copy
+
+Redmine **#50638**, with negative knowledge from **#50652** and **#50775**.
+
+The transport itself is small: one endpoint, `POST` for JSON-RPC, `GET`
+answered with 405, `DELETE` for teardown. Almost all of the design work went
+into what it refuses to do, because three community Jules servers had already
+demonstrated the failure modes.
+
+**Rejected: dispatching from a namespace lookup.** `cavuminfundo/jules-mcp-server`
+(#50652) resolves a tool call with `tool_fn = globals().get(tool_name)` and
+invokes it with attacker-supplied keyword arguments. The lookup is the module's
+entire global namespace, not a registry of MCP tools, so any module-scope
+callable is reachable — remote arbitrary-function-call behind an unauthenticated
+`0.0.0.0:8000` listener, with `except Exception: pass` around it so failed
+probing is silent. We dispatch from the SDK's explicit tool registry, built in
+one place (`src/server-factory.ts`) for both transports.
+`tests/http/registry.test.ts` asserts that a non-tool name is rejected rather
+than invoked, and that no Jules call is made when it is.
+
+**Rejected: a lenient fallback path.** The same repo's
+`CatchAllMessagesFallbackMiddleware` exists to keep working when an SSE session
+id is expired rather than returning 404 — and in being lenient about session
+ids it skips session validation entirely. There is exactly one route into
+dispatch here, an unknown `Mcp-Session-Id` is a 404, and there is no
+convenience branch around it.
+
+**Rejected: unauthenticated HTTP in front of the API key.**
+`Scarmonit/antigravity-jules-orchestration` (#50775) deployed a public
+`POST /mcp/execute` with no inbound auth that forwarded request bodies straight
+into `julesClient.post('/sessions', …)` with the deployer's own key.
+Authentication here is unconditional and precedes dispatch; there is no
+unauthenticated mode to configure, and the server refuses to start without a
+token.
+
+**Rejected: treating a loopback bind as an authentication decision.** The
+ticket as originally filed said "authentication required when not bound to
+loopback". Its journal note revised that after #50662: `socat` relays
+re-originate connections, so a backend behind one sees `127.0.0.1` as the peer
+for every relayed request and any "is the caller local?" check answers yes for
+the whole tailnet. Nothing in `src/http/guards.ts` reads a peer address.
+`bindsBeyondLoopback` exists only to print an operator warning, and a mutation
+that makes the token optional for a loopback bind is killed by
+`tests/http/config.test.ts`.
+
+**Rejected: wildcard CORS.** `Access-Control-Allow-Origin: *` on an endpoint
+holding a Jules API key (the reference implementation, #50638) is refused at
+config load. The allowlist is exact-match and empty by default, so any request
+carrying an `Origin` is rejected unless it was named.
+
+**Accepted from the reference** (`Rahul7562/jules-mcp-server`, MIT —
+LICENSE read directly, ideas only, no code copied): the 405-for-GET insight,
+and the shape of keeping the transport a thin module over the same tool
+implementation the stdio server uses. One correction to the ticket: the SDK's
+own `StreamableHTTPServerTransport` does _not_ return 405 for GET — its
+`handleGetRequest` opens an SSE stream — so the 405 has to come from our handler
+ahead of it.
 
 ## Future Considerations
 
-- **Remote HTTP deployment** for broader distribution (Cloudflare Workers or similar)
+- **Remote HTTP deployment** for broader distribution (Cloudflare Workers or similar) — the transport exists (#50638) but is deliberately localhost-and-token only; remote exposure needs per-tool authorization and rate limiting first
 - **Bulk operations**: create multiple sessions from a list of tasks
 - **Source auto-discovery**: if only one source exists, auto-select it in `create_session`
 - **MCP app widgets**: rich session status dashboard, plan review UI

@@ -138,6 +138,22 @@ describe('formatSession', () => {
         expect(result).toContain('https://github.com/o/r/pull/1');
         expect(result).toContain('Bug Fix');
     });
+
+    // #50828: some responses (`:approvePlan`) omit sourceContext entirely.
+    // Rendering must degrade to a placeholder, not throw.
+    it('renders a placeholder when the API omits sourceContext', () => {
+        const { sourceContext: _omitted, ...withoutSource } = baseSession;
+        const result = formatSession(withoutSource as Session);
+        expect(result).toContain('Source: (not reported by the API)');
+        expect(result).toContain('COMPLETED');
+    });
+
+    it('formatSessionCompact does not throw when sourceContext is missing', () => {
+        const { sourceContext: _omitted, ...withoutSource } = baseSession;
+        expect(() =>
+            formatSessionCompact(withoutSource as Session),
+        ).not.toThrow();
+    });
 });
 
 describe('formatActivity', () => {

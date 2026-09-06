@@ -13,11 +13,12 @@ Built on the **official** Jules REST API (`v1alpha`) with CLI-inspired features 
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **19 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a patch extractor, a consolidated diff viewer, and local source configuration.
+- **20 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
+- **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are _derived from its own text_, so the two cannot drift apart.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 257 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 615 unit tests, smoke test against the live API.
 
 ---
 
@@ -28,11 +29,16 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Install](#install)
 - [Configuration](#configuration)
 - [Use it with Claude Code](#use-it-with-claude-code)
+- [Streamable-HTTP transport (opt-in)](#streamable-http-transport-opt-in)
 - [Tool reference](#tool-reference)
+- [Prompt catalog](#prompt-catalog)
 - [Working with Jules: the lifecycle](#working-with-jules-the-lifecycle)
 - [Reviewing what Jules did](#reviewing-what-jules-did)
 - [Reworking a Jules PR — read this before you force-push](#reworking-a-jules-pr--read-this-before-you-force-push)
 - [Scheduling recurring tasks](#scheduling-recurring-tasks)
+- [Bounding which repos a session may touch](#bounding-which-repos-a-session-may-touch)
+- [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts)
+- [Starting a task from a GitHub issue](#starting-a-task-from-a-github-issue)
 - [Audit logging](#audit-logging)
 - [Jules API quirks worth knowing](#jules-api-quirks-worth-knowing)
 - [Project layout](#project-layout)
@@ -62,17 +68,19 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 257 unit tests
+npm test           # 615 unit tests
 ```
 
 ## Configuration
 
-The server reads two environment variables:
+The server reads these environment variables:
 
-| Variable               | Required | Purpose                                                                                                                                                                                                                                                                                     |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                            |
-| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling). |
+| Variable               | Required | Purpose                                                                                                                                                                                                                                                                                           |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                                  |
+| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling).       |
+| `JULES_ALLOWED_REPOS`  | no       | Comma-separated allowlist of repositories any session may target, supporting `owner/*` and a bare `*`. Enforced on `jules_create_session`, `jules_run_task`, `jules_schedule_task` and `jules_create_session_from_issue`. Unset means no restriction, and the server says which it is at startup. |
+| `GITHUB_TOKEN`         | no       | Token used to read issues. `GH_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN` are accepted as fallbacks, in that order. Unset works fine for public repos at GitHub's anonymous 60 requests/hour; a token raises that to 5000 and is required for private repos. Read-only scope is enough.            |
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
@@ -106,9 +114,135 @@ Register it as an MCP server (e.g. in a project's `.claude/settings.json` or you
 
 Then ask your assistant things like _"list my Jules sources"_, _"create a Jules task on owner/repo to add tests for X"_, or _"show me the diff Jules produced for session 123"_.
 
+## Streamable-HTTP transport (opt-in)
+
+**stdio is the default and nothing about it changed.** `npm start` with no new
+environment variables behaves exactly as it did before this transport existed.
+You get HTTP only by asking for it.
+
+```bash
+export JULES_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+node dist/index.js --transport http     # or JULES_MCP_TRANSPORT=http
+```
+
+That serves one MCP endpoint at `http://127.0.0.1:9673/mcp`:
+
+| Method        | Response                                                                     |
+| ------------- | ---------------------------------------------------------------------------- |
+| `POST`        | `application/json` JSON-RPC response; **202 with no body** for notifications |
+| `GET`         | **405 Method Not Allowed** — the deliberate "no SSE stream here" signal      |
+| `DELETE`      | Session teardown (404 if the session id is unknown)                          |
+| `OPTIONS`     | 204 preflight, only for an allowlisted `Origin`                              |
+| anything else | 405                                                                          |
+
+Point a client at it with a bearer token:
+
+```json
+{
+    "mcpServers": {
+        "jules": {
+            "type": "http",
+            "url": "http://127.0.0.1:9673/mcp",
+            "headers": { "Authorization": "Bearer ${JULES_MCP_HTTP_TOKEN}" }
+        }
+    }
+}
+```
+
+### Why GET returns 405
+
+The MCP spec (2025-06-18, _Transports → Listening for Messages from the
+Server_) says the server **MUST** either return `Content-Type:
+text/event-stream` for a GET on the MCP endpoint **or** return 405, "indicating
+that the server does not offer an SSE stream at this endpoint". We do not offer
+one, and 405 is how the spec says so. The official `@modelcontextprotocol/sdk`
+client handles it as a clean no-op (`if (response.status === 405) { return; }`)
+and continues POST-only, so no functionality is lost — jules-mcp has no
+server-initiated notifications to push.
+
+Two details worth knowing if you read the SDK:
+
+- The SDK's own `StreamableHTTPServerTransport` does **not** do this. Its
+  `handleGetRequest` opens an SSE stream. The 405 is produced by our handler,
+  ahead of the SDK transport. Everything else — Accept-header rules, the
+  202-for-notifications rule, protocol-version negotiation, JSON-RPC framing —
+  is the SDK's.
+- The client only attempts that GET after `notifications/initialized` is
+  accepted, and routes failures to `onerror` rather than throwing.
+  `tests/http/no-sse.test.ts` drives a real SDK client against the real handler
+  to prove both halves, so the claim is checked against the pinned SDK on every
+  test run rather than trusted.
+
+### Configuration
+
+| Variable                         | Required | Default     | Purpose                                                                        |
+| -------------------------------- | -------- | ----------- | ------------------------------------------------------------------------------ |
+| `JULES_MCP_TRANSPORT`            | no       | `stdio`     | `stdio` or `http`. `--transport http` overrides it.                            |
+| `JULES_MCP_HTTP_TOKEN`           | **yes**  | —           | Bearer token. **No unauthenticated mode exists**; the server refuses to start. |
+| `JULES_MCP_HTTP_HOST`            | no       | `127.0.0.1` | Bind address.                                                                  |
+| `JULES_MCP_HTTP_PORT`            | no       | `9673`      | Bind port.                                                                     |
+| `JULES_MCP_HTTP_PATH`            | no       | `/mcp`      | The single endpoint path. Everything else is 404.                              |
+| `JULES_MCP_HTTP_ALLOWED_ORIGINS` | no       | _(none)_    | Comma-separated exact origins. `*` is rejected at startup.                     |
+| `JULES_MCP_HTTP_PROXY_SECRET`    | no       | _(unset)_   | Enables the proxy-identity path. Unset means that path does not exist.         |
+| `JULES_MCP_HTTP_MAX_BODY_BYTES`  | no       | `1048576`   | Hard cap on request body size, enforced as bytes arrive.                       |
+
+Both secrets must be at least 32 characters.
+
+### Security note — read this before exposing it
+
+This process holds a `JULES_API_KEY` with write access to every connected
+source. **An HTTP surface in front of tool dispatch inherits that key's full
+authority.** Two community Jules servers shipped exactly that mistake: one bound
+`0.0.0.0` with no auth and dispatched through a `globals()` lookup (Redmine
+#50652), and one deployed a public unauthenticated `POST /mcp/execute` that
+forwarded request bodies straight to Jules with the deployer's own key (#50775).
+
+What this implementation does about it:
+
+- **Authentication is unconditional and precedes dispatch.** Every request —
+  `POST`, `GET`, `DELETE`, any path, any peer — is authenticated before the
+  method is dispatched and before the body is parsed. `OPTIONS` preflights are
+  the sole exception and they reach nothing.
+- **Authentication is not gated on the bind address, and no security decision
+  reads the peer address.** A loopback bind is _not_ a containment boundary on
+  a machine where a relay might front it: `socat` re-originates connections, so
+  the backend sees `127.0.0.1` as the peer for every relayed request and "is
+  the caller local?" answers yes for everything behind the relay (Redmine
+  #50662). The non-loopback bind warning is an operator courtesy, nothing more.
+- **A proxy-supplied identity requires a shared secret.** `X-Forwarded-User` is
+  honoured only when `X-Forwarded-Auth-Secret` matches
+  `JULES_MCP_HTTP_PROXY_SECRET`, compared in constant time. With no secret
+  configured the proxy path is disabled outright rather than trusting the
+  header — the forwarded headers are then inert.
+- **Origin is validated and CORS is never wildcarded.** The allowlist is exact
+  match; a configured `*` is refused at startup. With no allowlist (the
+  default) any request carrying an `Origin` is rejected 403, which is the
+  DNS-rebinding defence the spec asks for. A request with **no** `Origin`
+  header is allowed through to the auth gate — non-browser clients do not send
+  one, and the bearer check is what stops them.
+- **Dispatch is an explicit registry.** Both transports build their server from
+  `createJulesMcpServer`, so a name that is not a registered `jules_*` tool is
+  not callable. There is no fallback path, no leniency branch for expired
+  session ids, and no second entry point.
+- **Sessions are validated, not decorative.** An unknown `Mcp-Session-Id` is a
+  404 and the client must re-initialize; it is never silently upgraded into a
+  fresh session.
+- **Concurrent requests are served concurrently.** Node's HTTP server is
+  event-driven and each session's requests are awaited independently, so a long
+  `jules_run_task` poll does not block other clients.
+
+**What still is not bounded:** any holder of `JULES_MCP_HTTP_TOKEN` can call
+every tool, including `jules_create_session` and `jules_delete_session`. There
+is no per-tool authorization, no rate limiting, and no audit of _which_ HTTP
+principal made a call beyond the stderr session log — `emitAudit()` records the
+`reason` a tool was given, not the transport identity. Treat the token as
+equivalent to the Jules API key itself. Do not put this transport on a shared
+host, a tailnet, or behind a relay without deciding, deliberately, that
+everything which can reach it may act as you on every connected repository.
+
 ## Tool reference
 
-19 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
+20 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
@@ -121,16 +255,16 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Sessions
 
-| Tool                        | Description                                                                                                               | Key params                                                                                                                                                                                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_create_session` ✎🔍  | Start a coding task.                                                                                                      | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?`                                                                                                                             |
-| `jules_list_sessions`       | List sessions. Filter by repo or state, browse compactly, or annotate with change status.                                 | `page_size?`, `page_token?`, `source?` (filter by repo), `state?`, `stale_only?` (awaiting feedback + no changes), `compact?` (one line each), `detect_changes?` (annotate file counts), `detect_duplicates?`, `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set) |
-| `jules_get_session`         | Get one session's state, outputs, PR links.                                                                               | `session_id`                                                                                                                                                                                                                                                                          |
-| `jules_approve_plan` ✎      | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason`                                                                                                                                                                                                                                                                |
-| `jules_send_message` ✎      | Send feedback / a follow-up prompt to a session.                                                                          | `session_id`, `message`, `reason`                                                                                                                                                                                                                                                     |
-| `jules_archive_session` ✎   | Close out a session and hide it from the active list. Reversible.                                                         | `session_id`, `reason`                                                                                                                                                                                                                                                                |
-| `jules_unarchive_session` ✎ | Restore a previously archived session to the active list.                                                                 | `session_id`, `reason`                                                                                                                                                                                                                                                                |
-| `jules_delete_session` ✎🔥  | **Permanently** delete a session (irreversible). Guarded by `confirm_destructive`; prefer archiving.                      | `session_id`, `reason`, `confirm_destructive` (default false)                                                                                                                                                                                                                         |
+| Tool                        | Description                                                                                                               | Key params                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_create_session` ✎🔍  | Start a coding task.                                                                                                      | `prompt`, `source`, `starting_branch`, `title?`, `require_plan_approval?` (default **true**), `automation_mode?` (`AUTO_CREATE_PR`), `reason`, `dry_run?`                                                                                                                                                                                                                                    |
+| `jules_list_sessions`       | List sessions. Filter by repo or state, browse compactly, or annotate with change status.                                 | `page_size?`, `page_token?`, `source?` (filter by repo), `state?`, `stale_only?` (awaiting feedback + no changes; implies `detect_changes`), `compact?` (one line each), `detect_changes?` (annotate file counts — **one API call per matched session**), `detect_duplicates?`, `max_pages?` (scan N pages; defaults to 1, or 10 when `source` is set — filters apply only to pages scanned) |
+| `jules_get_session`         | Get one session's state, outputs, PR links.                                                                               | `session_id`                                                                                                                                                                                                                                                                                                                                                                                 |
+| `jules_approve_plan` ✎      | Approve a pending plan. Pre-validates the session is in `AWAITING_PLAN_APPROVAL` (returns a `409`-style error otherwise). | `session_id`, `reason`                                                                                                                                                                                                                                                                                                                                                                       |
+| `jules_send_message` ✎      | Send feedback / a follow-up prompt to a session.                                                                          | `session_id`, `message`, `reason`                                                                                                                                                                                                                                                                                                                                                            |
+| `jules_archive_session` ✎   | Close out a session and hide it from the active list. Reversible.                                                         | `session_id`, `reason`                                                                                                                                                                                                                                                                                                                                                                       |
+| `jules_unarchive_session` ✎ | Restore a previously archived session to the active list.                                                                 | `session_id`, `reason`                                                                                                                                                                                                                                                                                                                                                                       |
+| `jules_delete_session` ✎🔥  | **Permanently** delete a session (irreversible). Guarded by `confirm_destructive`; prefer archiving.                      | `session_id`, `reason`, `confirm_destructive` (default false)                                                                                                                                                                                                                                                                                                                                |
 
 ### Activities
 
@@ -148,13 +282,57 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 
 ### Convenience & review
 
-| Tool                     | Description                                                                                                                                                                                                             | Key params                                                                                                                                                                         |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_run_task` ✎       | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag. | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10) |
-| `jules_get_session_diff` | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).     | `session_id`, `summary?`                                                                                                                                                           |
-| `jules_pull_session`     | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                 | `session_id`                                                                                                                                                                       |
+| Tool                                  | Description                                                                                                                                                                                                             | Key params                                                                                                                                                                                                                                                 |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` ✎                    | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag. | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10)                                                                         |
+| `jules_get_session_diff`              | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).     | `session_id`, `summary?`                                                                                                                                                                                                                                   |
+| `jules_pull_session`                  | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                 | `session_id`                                                                                                                                                                                                                                               |
+| `jules_create_session_from_issue` ✎🔍 | Turn a GitHub issue into a Jules task: fetch title, body, labels and the comment thread, fence all of it, and create a session. **`AUTO_CREATE_PR` is off unless you opt in** — see below.                              | `repo` (`owner/repo`), `issue_number`, `reason`, `source?`, `starting_branch?` (`main`), `title?`, `include_comments?` (true), `max_comments?` (100), `prompt_template?`, `allow_auto_create_pr?` (**false**), `require_plan_approval?` (true), `dry_run?` |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
+
+## Prompt catalog
+
+19 tools is a lot to orchestrate from scratch. The server also exposes MCP **prompts** — pre-written task templates that clients surface as slash commands, so a common workflow is one pick instead of a plan.
+
+**7 prompts**, in two kinds. A `task` prompt renders text destined for the `prompt` argument of `jules_create_session` / `jules_run_task`; an `operation` prompt is a workflow that drives this server's own tools.
+
+| Prompt                     | Kind      | What it does                                                                         | Arguments                                                                        |
+| -------------------------- | --------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `add-tests-for-module`     | task      | Cover one module with tests that each fail when the behaviour they assert is removed | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                       |
+| `fix-failing-ci`           | task      | Diagnose a CI failure from its log and fix the mechanism, smallest change first      | `WORKFLOW_NAME`, `FAILURE_LOG` ⚠, `SOURCE`, `STARTING_BRANCH`                    |
+| `upgrade-dependency`       | task      | Move one package to a target version and adapt only the forced call sites            | `PACKAGE_NAME`, `TARGET_VERSION`, `RELEASE_NOTES` ⚠, `SOURCE`, `STARTING_BRANCH` |
+| `refactor-for-readability` | task      | Restructure a module behind an unchanged interface, keeping rationale comments       | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                       |
+| `write-missing-docs`       | task      | Derive docs from the code, treating existing prose as a claim to verify              | `MODULE_PATH`, `DOC_FILE`, `SOURCE`, `STARTING_BRANCH`                           |
+| `triage-stale-sessions`    | operation | Classify sessions idle past a threshold; archive the ones you name back              | `STALE_AFTER_HOURS`                                                              |
+| `review-session-diff`      | operation | Read a session patch hunk by hunk and return an approve / revise / reject verdict    | `SESSION_ID`                                                                     |
+
+⚠ marks an argument that carries **externally-sourced text**. Those are nonce-fenced with `src/untrusted.ts` before they reach the rendered prompt — see [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts).
+
+### Arguments are derived from the template, never declared beside it
+
+A template body carries two kinds of placeholder:
+
+- `<NAME>` — an operator-supplied identifier (a path, a branch, a package name). Substituted inline.
+- `[[NAME]]` — externally-sourced text (a CI log, release notes). Substituted into a nonce fence, with the token itself replaced by a pointer to that fenced block.
+
+`prompts/list` builds each prompt's `arguments` by **scanning its own body for those tokens**. There is no second list to keep in step: adding `<TIMEOUT>` to a body _is_ adding a `TIMEOUT` argument, and the fencing decision for a value follows from the token form rather than from a table someone has to remember to update. The idea comes from [`melbinjp/jules-prompts`](https://github.com/melbinjp/jules-prompts) (MIT); the implementation here is our own.
+
+Every argument is optional, so `prompts/get` with no arguments is a **preview**: unfilled placeholders render as themselves rather than erroring, through the same substitution path a filled render uses.
+
+```
+$ prompts/get add-tests-for-module            # no arguments
+# Add tests for `<MODULE_PATH>`
+...
+4. Run `<TEST_COMMAND>` and leave the suite green.
+
+$ prompts/get add-tests-for-module MODULE_PATH=src/formatters.ts
+# Add tests for `src/formatters.ts`
+...
+4. Run `<TEST_COMMAND>` and leave the suite green.
+```
+
+Templates carry no standing guidance of their own — `jules_create_session` prepends `guidance.md` at creation time, so embedding it in a template would ship it twice. Scope in each template is written as positive enclosure ("ONLY add or extend tests covering …") rather than as a list of prohibitions.
 
 ## Working with Jules: the lifecycle
 
@@ -175,19 +353,35 @@ A typical manual flow:
 
 Or skip the babysitting with **`jules_run_task`**, which does create → approve → wait for you.
 
+> **The plan gate is on by default and discharged by default.** `jules_create_session` defaults `require_plan_approval` to `true`, and `jules_run_task` always creates with it set — but `run_task`'s `auto_approve` also defaults to `true`, so _we_ approve on your behalf and no human sees the plan. Pass `auto_approve: false` if you want it to stop and show you. And note approval **carries forward**: once a plan is approved, a revision executes straight through with no second `AWAITING_PLAN_APPROVAL`, so revise _before_ approving if the gate matters.
+
+### States we do not recognise
+
+`v1alpha` moves, and the state vocabulary has moved with it. Older sessions carry `PENDING`, `RUNNING` and `AWAITING_USER_INPUT`; **both** `CANCELLED` and `CANCELED` spellings appear; `COMPLETED_UNKNOWN` shows up in the field. Four community clients surveyed produced four state lists and no two agree — several of the names are plainly guesses.
+
+So `SessionState` is an **open union**: any string is accepted, with completion offered for the ones we know. The polling in `jules_run_task` branches on "is this a state I recognise as still working?", not "is this state terminal?". An unrecognised state stops the poll and is reported **verbatim**, so a finished session under an unfamiliar name comes back at once instead of burning the 10-minute deadline and then being reported — wrongly — as a timeout. `timeout` means the deadline expired, and nothing else.
+
+Adding names to the list is not the fix and never will be; the default branch being safe is.
+
+One cost is worth knowing: an open union means `tsc` no longer catches a typo in a state comparison — `state === 'PAUSDE'` is simply never true, and the session it was meant to short-circuit polls to the deadline instead. A test asserts that every state literal compared against in `src/` is a name we recognise, which is what closes that gap.
+
 ## Reviewing what Jules did
 
 > **Heads-up:** `session.outputs` is frequently empty even when Jules made changes. The actual diffs live in **activity artifacts** (`changeSet.gitPatch.unidiffPatch`).
 
 `jules_get_session_diff` handles this for you — it walks the activities, picks the **last** (cumulative) changeset, strips binary patch blobs, and returns the plan + final diff in one readable block. Use it before approving a plan or opening a PR yourself. For a large changeset, pass `summary=true` to get just the list of changed files with `+/-` line counts instead of the full diff.
 
-**Clearing out abandoned sessions.** Sessions that are awaiting feedback but produced no diff pile up — 37 of one repo's 104, nearly all repeated persona runs with no PR and nothing to review. `jules_list_sessions(stale_only: true)` selects exactly those, and `jules_archive_session` clears them:
+**Clearing out abandoned sessions.** A prompt that nobody returns to leaves its session parked in `AWAITING_USER_FEEDBACK` indefinitely — no PR, no diff, nothing to review. Because that state is not terminal, anything reasoning about active work has to filter them out. They accrue at whatever rate the prompt is issued, so a _recurring_ prompt is the case that matters: one scheduled persona run per repo per day adds one such session per repo per day, forever, and no amount of archiving fixes that until the schedule itself is changed. `jules_list_sessions(stale_only: true)` selects exactly those, and `jules_archive_session` clears them:
 
 ```
 jules_list_sessions(source: "GrantLoft", stale_only: true, compact: true)
 ```
 
 `stale_only` implies `detect_changes`, narrows by state first so excluded sessions cost no extra API call, and deliberately excludes any session whose activities fetch failed — missing change data is not evidence of no changes.
+
+**Budget the calls before you run it.** `detect_changes` — and therefore `stale_only` — spends **one `listActivities` call for every session that survives the filters**, four in flight at a time. On an account with a hundred sessions awaiting feedback, a bare `jules_list_sessions(stale_only: true)` is a hundred API calls in a single invocation. Only the state narrowing is free. `source` is applied before change detection, so scoping to one repo genuinely reduces the bill — sweep a repo at a time, as in the example above, rather than the whole account at once.
+
+**A page cap makes a count a sample, not a total.** `source`, `state` and `stale_only` all filter **client-side over the pages actually fetched**, and `max_pages` defaults to **1** (10 when `source` is set, hard cap 20). So the reported `count` is "matches among the sessions scanned", never "matches on the account". If the response still carries a `nextPageToken`, pages remain and the count is a lower bound — raise `max_pages` and re-run until the token is gone before treating any figure as a total or concluding that something does not exist.
 
 **Branch lists are omitted by default.** `jules_list_sources` used to return every branch of every repo, which grows without bound as Jules opens task branches: across 474 connected sources that was 5,227 branches and 72.7% of the payload, one repo carrying 515 on its own. Each repo now reports `branchCount` and keeps `defaultBranch`; pass `include_branches: true` when you actually need the lists.
 
@@ -248,6 +442,80 @@ Schedules persist to `~/.local/share/jules-mcp/schedules.enc`, **encrypted with 
 
 > **Security note — auto-generated key.** When `JULES_ENCRYPTION_KEY` is unset, the auto-generated key is persisted as plaintext hex at `~/.local/share/jules-mcp/.key` (file mode `0600`, directory `0700`, re-tightened on every load). That protects against other unprivileged users, but anyone who can read your home directory — root, backup processes, or a misconfigured share — can decrypt `schedules.enc` with it. On multi-user or shared systems, set `JULES_ENCRYPTION_KEY` from your secret manager instead so the key never touches disk. Schedule entries can contain prompts and repo names; treat them accordingly.
 
+## Bounding which repos a session may touch
+
+`JULES_ALLOWED_REPOS` is the guardrail worth having: there are hundreds of connected sources, and a Jules session writes a branch and can open a PR. Filtering what an agent _reads_ is guesswork; bounding what it may _write to_ is not.
+
+```bash
+JULES_ALLOWED_REPOS='avic/*,Simmons-Systems/*,Baldwin-Fire-Rescue/bfr-shifts'
+```
+
+Comma-separated, case-insensitive, `owner/*` wildcards, and a bare `*` for everything. **Unset means no restriction** — nothing breaks on upgrade — and the server prints which state it is in on startup, because an absent guardrail is invisible and reads exactly like a working one.
+
+Enforced on every tool that creates or schedules work: `jules_create_session`, `jules_run_task`, `jules_schedule_task`, `jules_create_session_from_issue`. A denial returns a `403`-shaped error naming the repo and the allowlist, and **emits an audit record**, so a refusal is as traceable as an action.
+
+Two deliberate properties:
+
+- **`dry_run` is a preview, not an exemption.** A denied repo is refused in both modes, so a preview cannot become the rehearsal for a request that would be refused anyway.
+- **It fails closed on a source it cannot decompose.** If a list is configured and the repo cannot be read out of the source name, the request is refused with a message saying so — "cannot confirm" must not read as "permit" in a guardrail. The two denials carry different messages so you know whether to add an entry or fix the source name.
+
+The wildcard compares the whole owner segment, never a prefix: `avic/*` does not admit `avicious/anything`.
+
+## Fencing untrusted text in prompts
+
+Anything you interpolate into a Jules prompt from a source someone else can write — a GitHub issue body, a PR description, a comment thread, a commit message — is an instruction channel into an agent that has repo write access. `src/untrusted.ts` fences it.
+
+```ts
+import { buildFencedPrompt } from './untrusted.js';
+
+const prompt = buildFencedPrompt('Fix the bug described below.', [
+    { label: 'ISSUE_TITLE', content: issue.title },
+    { label: 'ISSUE_BODY', content: issue.body },
+]);
+```
+
+Each field is wrapped in `<<<BEGIN <LABEL> <NONCE>>>>` / `<<<END <LABEL> <NONCE>>>>` markers, where the nonce is 96 bits of CSPRNG output minted **at prompt-build time** — after whoever wrote the untrusted content wrote it. That is the whole defence: an attacker cannot close a fence whose label did not exist when they were typing. The prompt opens with framing that tells the model the fenced regions are inert data, that instructions inside them are never to be followed, and that a marker carrying a different token is forged.
+
+The [prompt catalog](#prompt-catalog) routes through this automatically: a `[[NAME]]` placeholder in a template body is fenced when a value is supplied, and the token itself becomes a pointer to the fenced block. That is the only difference between the two placeholder forms, and it is derived from the body rather than declared beside it.
+
+**The content is passed through byte-identical.** No NFKC normalization, no stripping, no neutralizing of phrases like "ignore previous instructions" — the fence is lossless on purpose. Rewriting the payload would have to enumerate every escape correctly to be sound, and it mangles legitimate text: a security advisory, a diff, or a code block quoting those phrases comes out altered. (Stripping zero-width/bidi/ANSI characters is still worth doing for _display_ safety. It is a different job; do not fold it into the fence.)
+
+> **Scope limit — fencing closes the first hop only.** Jules fetches URLs it finds in a prompt (measured 2026-08-31, above). A URL inside a fenced block therefore still reaches Jules through a channel the fence does not touch: the fence governs what we _send_, not what Jules _retrieves_. The framing asks the model not to follow those links, which is a request, not a control. Anything built on attacker-writable text needs a scope bound as well — restrict which repos a session may write to, and prefer stopping at a reviewable patch (`jules_pull_session`) over `AUTO_CREATE_PR`.
+
+## Starting a task from a GitHub issue
+
+`jules_create_session_from_issue` fetches an issue's title, body, labels and **comment thread**, fences every one of them, and creates a session from the result.
+
+```
+jules_create_session_from_issue(
+    repo = "Avicennasis/jules-mcp",
+    issue_number = 42,
+    reason = "triaging the crash report",
+    dry_run = true,          # compose the prompt, create nothing
+)
+```
+
+The comment thread is included by default because that is usually where the actual requirement lives — and it is also the whole reason the rest of this section exists. **On a public repository, anyone can open an issue and anyone can comment on one.** That text is being handed to an agent with write access to your repo.
+
+Three controls apply, in decreasing order of how much they are worth:
+
+1. **Scope — `JULES_ALLOWED_REPOS`.** Checked before GitHub is contacted at all, `dry_run` included. A bound on what the agent may _write_ outlives any amount of filtering of what it _reads_, which is why it is first. Unset means no restriction.
+2. **No auto-PR by default.** `automationMode` is left unset unless you pass `allow_auto_create_pr: true`, so the default run stops at a reviewable patch you read via `jules_pull_session` or `jules_get_session_diff`. Turning it on means a drive-by issue comment can reach an open PR with no human in between; only do it for a repo whose issues you trust. `require_plan_approval` also stays `true` — and note the plan gate carries forward across revisions (above).
+3. **Fencing.** Title, body, labels and comments each go into their own nonce fence (see the previous section) before they enter the prompt.
+
+> **What those three do not cover.** Jules fetches URLs it finds in a prompt (measured 2026-08-31, above). A bare link in an issue comment therefore still reaches Jules, through a channel the fence does not touch. Control 1 is what remains standing when that happens. Whether Jules follows links found _within_ a fetched page is still untested.
+
+Two smaller deliberate choices:
+
+- **The default session title is `Issue owner/repo#42`, not the issue's own title.** The number is the traceability the ticket asked for; the title is attacker-written text landing in a field whose rendering we do not control. Pass `title` if you want it anyway.
+- **The prompt template is replaceable, the fencing is not.** `prompt_template` substitutes `{repo}`, `{issue_number}` and `{issue_url}` and replaces the standing requirements along with everything else — if you bring your own instructions you own them. It cannot replace the security framing or the fences, which are applied around whatever it produces.
+
+**Reading the issue.** The server talks to `api.github.com` with the platform `fetch` — no Octokit, and no dependency on `gh` being installed or logged in. A token is read from `GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_PERSONAL_ACCESS_TOKEN`, and is never logged, never echoed into a prompt and never passed in argv. With none set, public repos still work at GitHub's anonymous 60 requests/hour.
+
+Comments are paged explicitly rather than left at GitHub's 30-row default, so an issue with 200 comments is not silently read as its first 30. `max_comments` (default 100) caps it, and whatever is left out is reported to the model in the part of the prompt _we_ author — never in the fenced part, where a comment could write its own disclaimer.
+
+One error worth recognising: **GitHub answers `404` for a repository you cannot see**, so a private repo and a nonexistent issue are indistinguishable from the outside. The error says so rather than implying you typed the number wrong.
+
 ## Audit logging
 
 Every mutation can emit an audit record describing what happened and _why_ (the required `reason`):
@@ -269,17 +537,42 @@ These tripped us up while building against the live API; they're handled interna
 - **Diffs live in activity artifacts**, not `session.outputs`; cumulative changesets repeat across `progressUpdated` activities, so the last artifact-bearing activity holds the complete diff.
 - **Sessions can be archived, unarchived, and deleted** via `v1alpha` (`:archive`, `:unarchive`, and `DELETE`). Archiving is reversible and is the recommended way to close out finished work; `Session.archived` reflects the state. (Earlier `v1alpha` had no such endpoints — they were added later, so older notes claiming "web UI only" are out of date.)
 
+### Measured against the live API, 2026-08-31
+
+Each of these was observed directly, not inferred from documentation or from another project's source. Dated because `v1alpha` moves.
+
+- **Jules has live internet access, and will fetch URLs you put in a prompt.** Confirmed both ways: a nonce marker present only on a public page came back verbatim, and the target host logged two fetches from `34.134.215.5` (Google LLC) — one with **Lynx**, one with **curl**. Anything you interpolate into a prompt from an untrusted source is therefore not just text Jules reads; it is a list of places Jules may go. Whether it follows links found _within_ a fetched page is **untested**.
+- **Plan approval carries forward across revisions.** Once a plan is approved, sending a revision produces a _new_ plan that executes straight through — no second `AWAITING_PLAN_APPROVAL`, no approval activity. So "approve, then refine" silently runs the refined plan unreviewed. If you need the gate, revise **before** approving.
+- **`automationMode` accepts only `AUTOMATION_MODE_UNSPECIFIED` and `AUTO_CREATE_PR`.** `NONE` is rejected: `400 INVALID_ARGUMENT`, `Invalid value at 'session.automation_mode' (type.googleapis.com/google.labs.jules.v1alpha.AutomationMode)`. Errors use the standard `google.rpc` envelope with a typed `details[]` array.
+- **Archiving a running session moves it to `PAUSED`, not to a terminal state.** An archived session is therefore still non-terminal, and a poll loop keyed on terminal states will wait on it until the deadline.
+- **`createSession` responses do carry `state`** (`QUEUED`) — worth knowing because some community clients default an assumed-missing `state` client-side.
+- **`:approvePlan` responses do NOT carry `sourceContext`.** The approval itself lands, but the reply omits the field, so `session.sourceContext.source` on the response threw _after_ the mutation had succeeded — the caller saw a 500 for an approval that worked, and no audit record was written. `:archive` responses do carry it. Because of this, `Session.sourceContext` is declared **optional** in `src/types.ts`: assume it may be absent from any response and guard the dereference. Redmine #50828.
+
 ## Project layout
 
 ```
 src/
-├── index.ts              # entry point: wires tools + scheduler, stdio transport
+├── index.ts              # entry point: wires scheduler, selects a transport
+├── server-factory.ts     # the one place tools are registered (both transports)
+├── http/
+│   ├── config.ts         # env parsing, transport selection, fail-closed checks
+│   ├── guards.ts         # constant-time auth + Origin validation (header-only)
+│   ├── handler.ts        # path/Origin/auth/method gate ahead of dispatch
+│   └── server.ts         # session router + node:http wiring
 ├── jules-client.ts       # typed HTTP client for the Jules API
 ├── types.ts              # types matching the Jules wire format
 ├── errors.ts             # structured error classes
 ├── formatters.ts         # human-readable output (sessions, activities, diffs, patches)
 ├── audit.ts              # inkwell-emit wrapper + JSONL fallback
 ├── source-config.ts      # local per-source metadata store (suggestions, notes)
+├── untrusted.ts          # nonce-fenced envelopes for untrusted prompt input
+├── allowlist.ts          # JULES_ALLOWED_REPOS policy shared by every creating tool
+├── github.ts             # read-only GitHub REST reader (issues + comments)
+├── retry.ts              # idempotency-aware retry policy (backoff, jitter, Retry-After)
+├── prompts/
+│   ├── template.ts       # placeholder scan, derived arguments, render + fence
+│   ├── catalog.ts        # the 7 task/operation templates
+│   └── register.ts       # prompts/list + prompts/get handlers
 ├── scheduler/
 │   ├── cron.ts           # node-cron manager
 │   └── persistence.ts    # AES-256-GCM encrypted schedule store
@@ -289,6 +582,7 @@ src/
     ├── activities.ts     # list, get
     ├── scheduling.ts     # schedule_task, list_schedules
     ├── convenience.ts    # run_task (with parallel mode)
+    ├── issues.ts         # create_session_from_issue (GitHub issue -> Jules task)
     └── diff.ts           # get_session_diff, pull_session
 scripts/
 ├── smoke-test.ts         # hits the live API (needs JULES_API_KEY)
@@ -300,7 +594,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (257 tests)
+npm test             # vitest run (615 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -322,9 +616,37 @@ The client maps HTTP failures to typed errors, and tools return a consistent sha
 
 Requests also carry a 30s timeout via `AbortSignal.timeout`.
 
+### Retries
+
+Failed requests are retried automatically — **twice by default**, with exponential backoff plus jitter, honoring `Retry-After` when the server sends it. What gets retried depends on whether replaying the request is safe:
+
+| Failure                 | `GET` / `HEAD` / `OPTIONS` / `PUT` / `DELETE` | `POST` / `PATCH` |
+| ----------------------- | --------------------------------------------- | ---------------- |
+| `429 Too Many Requests` | retried                                       | **retried**      |
+| `5xx`                   | retried                                       | not retried      |
+| Network failure         | retried                                       | not retried      |
+| Request timeout         | retried                                       | not retried      |
+| Any other `4xx`         | not retried                                   | not retried      |
+
+A `429` means the request was **rejected without being processed**, so replaying it is safe for any method. A `5xx`, a dropped socket, or a request timeout is **ambiguous** — the session may already have been created — and Jules offers no idempotency key, so replaying a `POST /sessions` can double-create and burn quota whose daily ceiling is unmeasured. A timeout expiring on _our_ side says nothing about whether the server processed the request, which is why it sits with the other ambiguous failures rather than counting as a verdict: a slow read gets a second chance, a slow create does not. If total wall-clock matters more than a retried read, lower `retries` or raise `requestTimeoutMs` — both say what they do, which a silently multiplied deadline does not.
+
+A `Retry-After` longer than `retryMaxDelayMs` (30s default) is **not** slept through — the error is surfaced with its `retryAfter` instead, because blocking an MCP tool call for an hour is worse than failing and letting the caller decide. Our own exponential term is clamped to that ceiling rather than declined.
+
+Tune or disable per client:
+
+```ts
+new JulesClient(key, {
+    retries: 0, // disable
+    retryBaseDelayMs: 500,
+    retryJitterMs: 250,
+    retryMaxDelayMs: 30_000,
+});
+```
+
 ## Roadmap
 
-- Remote streamable-HTTP deployment (Cloudflare Workers or similar)
+- ~~Streamable-HTTP transport~~ — done, opt-in; see [Streamable-HTTP transport](#streamable-http-transport-opt-in)
+- Remote deployment (Cloudflare Workers or similar) — needs per-tool authorization and rate limiting first
 - npm publish
 - Source auto-selection when only one is connected
 - ~~Bulk session creation from a task list~~ — done via `parallel` param on `jules_run_task`
