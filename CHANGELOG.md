@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Request timeouts are now retried on idempotent methods** (`GET`, `HEAD`,
+  `OPTIONS`, `PUT`, `DELETE`) and still never on `POST`/`PATCH`.
+
+    This reverses the timeout clause of #50643 in favour of #50447, on the
+    operator's decision. The original argument was that the deadline is the
+    caller's, set via `requestTimeoutMs`, so replaying it spends one they did
+    not ask for. The better argument is that a timeout expiring client-side
+    says nothing about whether the server processed the request — it is an
+    _absence_ of a verdict, not a verdict — which is exactly the ambiguity a
+    `5xx` or a dropped socket presents, and those already get the right answer.
+
+    The `POST` half is unchanged: a timed-out create may already have landed and
+    Jules has no idempotency key. A `429` arriving alongside a timeout does
+    **not** unlock the any-method fast path, since with no response there is no
+    server verdict to act on.
+
+    Redmine #50447; `DESIGN.md` Decisions item 5 records the reversal.
+
 - **MCP prompts.** Seven reusable task templates (`src/prompts/`), served over
   `prompts/list` and `prompts/get` and surfaced by clients as slash commands:
   `add-tests-for-module`, `fix-failing-ci`, `upgrade-dependency`,

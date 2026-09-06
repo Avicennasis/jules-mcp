@@ -22,9 +22,15 @@
  *
  * Two additions beyond the reference:
  *
- *   - A timeout is never retried. It is our own deadline expiring, not the
- *     server asking us to wait, and retrying multiplies a wall-clock the caller
- *     already bounded.
+ *   - A timeout is retried for IDEMPOTENT METHODS ONLY (#50447, operator
+ *     decision 2026-09-06). It is ambiguous in exactly the way a 5xx or a
+ *     dropped socket is: the deadline expired client-side, which says nothing
+ *     about whether the server processed the request. So a slow read gets a
+ *     second chance and a slow POST does not. This reverses #50643's blanket
+ *     never-retry, whose argument was that the deadline is the caller's to
+ *     spend -- true, but it applies to reads that cannot double-anything, and
+ *     the cost of failing a whole tool call on one slow GET is higher. Raise
+ *     `requestTimeoutMs` if the total wall-clock matters more.
  *   - A wait longer than `maxDelayMs` is declined rather than slept through.
  *     The reference sleeps for whatever `Retry-After` says; inside an MCP tool
  *     call an hour-long sleep is worse than an error, because the caller gets
@@ -101,12 +107,19 @@ export function planRetry(input: RetryInput): RetryDecision {
 
     const no: RetryDecision = { retry: false, delayMs: 0 };
 
-    if (timeout) return no;
     if (attempt >= maxRetries) return no;
 
     const idempotent = isIdempotentMethod(method);
-    const ambiguous = networkError || (status !== undefined && status >= 500);
-    const retryable = status === 429 || (ambiguous && idempotent);
+    const ambiguous =
+        networkError || timeout || (status !== undefined && status >= 500);
+
+    // A 429 is safe to replay for ANY method -- but only when we actually
+    // received one. A timeout means no response arrived, so a status alongside
+    // it is not a server verdict and must not unlock the any-method path: a
+    // timed-out POST stays unretryable however it is labelled.
+    const serverSaidWait = !timeout && status === 429;
+
+    const retryable = serverSaidWait || (ambiguous && idempotent);
     if (!retryable) return no;
 
     const jitter = random() * jitterMs;
