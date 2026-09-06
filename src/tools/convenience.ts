@@ -10,6 +10,7 @@ import {
     isActiveState,
 } from '../types.js';
 import { JulesAPIError } from '../errors.js';
+import { checkSourceAllowed } from '../allowlist.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -216,6 +217,24 @@ export function registerConvenienceTools(
             parallel,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
+
+            // #50432: bound WHICH REPO this may touch, before anything is
+            // created. dry_run is a preview, not an exemption -- a denied repo
+            // is refused in both modes so the preview cannot become the
+            // rehearsal for a request that would be refused anyway.
+            const allowlist = process.env.JULES_ALLOWED_REPOS;
+            const gate = checkSourceAllowed(normalizedSource, allowlist);
+            if (!gate.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: normalizedSource,
+                    reason,
+                    payload: { denied_by: 'allowlist', repo: gate.repo },
+                });
+                return errorResponse(new JulesAPIError(gate.message, 403));
+            }
 
             // --- Parallel mode: fan out N sessions, poll all concurrently ---
             if (parallel > 1) {

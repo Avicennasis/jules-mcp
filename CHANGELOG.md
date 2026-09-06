@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`JULES_ALLOWED_REPOS` is now enforced on every tool that creates or
+  schedules work** — `jules_create_session`, `jules_run_task`,
+  `jules_schedule_task`, and `jules_create_session_from_issue` — via a shared
+  `src/allowlist.ts`. Previously it guarded the issue tool only, which was the
+  slice #50457 needed.
+
+    A bound on which repository a session may target is the guardrail worth
+    having: there are hundreds of connected sources and a session writes a
+    branch and can open a PR. It is also the mechanical form of a repo-scope
+    rule that otherwise lives only in instructions.
+
+    Unset means no restriction, so nothing breaks on upgrade — and the server
+    now prints which state it is in at startup, because an absent guardrail is
+    invisible and reads exactly like a working one. Denials return a
+    `403`-shaped error naming the repo and the allowlist, and emit an audit
+    record. `dry_run` is a preview, not an exemption. It **fails closed** on a
+    source whose repo cannot be determined while a list is configured: in a
+    guardrail, "cannot confirm" must not read as "permit".
+
+    Redmine #50432.
+
 - **MCP prompts.** Seven reusable task templates (`src/prompts/`), served over
   `prompts/list` and `prompts/get` and surfaced by clients as slash commands:
   `add-tests-for-module`, `fix-failing-ci`, `upgrade-dependency`,

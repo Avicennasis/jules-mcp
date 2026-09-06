@@ -18,7 +18,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 576 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 607 unit tests, smoke test against the live API.
 
 ---
 
@@ -36,6 +36,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Reviewing what Jules did](#reviewing-what-jules-did)
 - [Reworking a Jules PR — read this before you force-push](#reworking-a-jules-pr--read-this-before-you-force-push)
 - [Scheduling recurring tasks](#scheduling-recurring-tasks)
+- [Bounding which repos a session may touch](#bounding-which-repos-a-session-may-touch)
 - [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts)
 - [Starting a task from a GitHub issue](#starting-a-task-from-a-github-issue)
 - [Audit logging](#audit-logging)
@@ -67,19 +68,19 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 576 unit tests
+npm test           # 607 unit tests
 ```
 
 ## Configuration
 
 The server reads these environment variables:
 
-| Variable               | Required | Purpose                                                                                                                                                                                                                                                                                     |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                            |
-| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling). |
-| `JULES_ALLOWED_REPOS`  | no       | Comma-separated allowlist of repositories `jules_create_session_from_issue` may target, supporting `owner/*` and a bare `*`. Unset means no restriction. Currently enforced on that tool only; extending it to every session-creating tool is tracked separately.                           |
-| `GITHUB_TOKEN`         | no       | Token used to read issues. `GH_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN` are accepted as fallbacks, in that order. Unset works fine for public repos at GitHub's anonymous 60 requests/hour; a token raises that to 5000 and is required for private repos. Read-only scope is enough.      |
+| Variable               | Required | Purpose                                                                                                                                                                                                                                                                                           |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                                  |
+| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling).       |
+| `JULES_ALLOWED_REPOS`  | no       | Comma-separated allowlist of repositories any session may target, supporting `owner/*` and a bare `*`. Enforced on `jules_create_session`, `jules_run_task`, `jules_schedule_task` and `jules_create_session_from_issue`. Unset means no restriction, and the server says which it is at startup. |
+| `GITHUB_TOKEN`         | no       | Token used to read issues. `GH_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN` are accepted as fallbacks, in that order. Unset works fine for public repos at GitHub's anonymous 60 requests/hour; a token raises that to 5000 and is required for private repos. Read-only scope is enough.            |
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
@@ -441,6 +442,25 @@ Schedules persist to `~/.local/share/jules-mcp/schedules.enc`, **encrypted with 
 
 > **Security note — auto-generated key.** When `JULES_ENCRYPTION_KEY` is unset, the auto-generated key is persisted as plaintext hex at `~/.local/share/jules-mcp/.key` (file mode `0600`, directory `0700`, re-tightened on every load). That protects against other unprivileged users, but anyone who can read your home directory — root, backup processes, or a misconfigured share — can decrypt `schedules.enc` with it. On multi-user or shared systems, set `JULES_ENCRYPTION_KEY` from your secret manager instead so the key never touches disk. Schedule entries can contain prompts and repo names; treat them accordingly.
 
+## Bounding which repos a session may touch
+
+`JULES_ALLOWED_REPOS` is the guardrail worth having: there are hundreds of connected sources, and a Jules session writes a branch and can open a PR. Filtering what an agent _reads_ is guesswork; bounding what it may _write to_ is not.
+
+```bash
+JULES_ALLOWED_REPOS='avic/*,Simmons-Systems/*,Baldwin-Fire-Rescue/bfr-shifts'
+```
+
+Comma-separated, case-insensitive, `owner/*` wildcards, and a bare `*` for everything. **Unset means no restriction** — nothing breaks on upgrade — and the server prints which state it is in on startup, because an absent guardrail is invisible and reads exactly like a working one.
+
+Enforced on every tool that creates or schedules work: `jules_create_session`, `jules_run_task`, `jules_schedule_task`, `jules_create_session_from_issue`. A denial returns a `403`-shaped error naming the repo and the allowlist, and **emits an audit record**, so a refusal is as traceable as an action.
+
+Two deliberate properties:
+
+- **`dry_run` is a preview, not an exemption.** A denied repo is refused in both modes, so a preview cannot become the rehearsal for a request that would be refused anyway.
+- **It fails closed on a source it cannot decompose.** If a list is configured and the repo cannot be read out of the source name, the request is refused with a message saying so — "cannot confirm" must not read as "permit" in a guardrail. The two denials carry different messages so you know whether to add an entry or fix the source name.
+
+The wildcard compares the whole owner segment, never a prefix: `avic/*` does not admit `avicious/anything`.
+
 ## Fencing untrusted text in prompts
 
 Anything you interpolate into a Jules prompt from a source someone else can write — a GitHub issue body, a PR description, a comment thread, a commit message — is an instruction channel into an agent that has repo write access. `src/untrusted.ts` fences it.
@@ -546,6 +566,7 @@ src/
 ├── audit.ts              # inkwell-emit wrapper + JSONL fallback
 ├── source-config.ts      # local per-source metadata store (suggestions, notes)
 ├── untrusted.ts          # nonce-fenced envelopes for untrusted prompt input
+├── allowlist.ts          # JULES_ALLOWED_REPOS policy shared by every creating tool
 ├── github.ts             # read-only GitHub REST reader (issues + comments)
 ├── retry.ts              # idempotency-aware retry policy (backoff, jitter, Retry-After)
 ├── prompts/
@@ -573,7 +594,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (576 tests)
+npm test             # vitest run (607 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
