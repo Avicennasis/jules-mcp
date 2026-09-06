@@ -24,6 +24,7 @@ import { registerSessionTools } from './tools/sessions.js';
 import { registerActivityTools } from './tools/activities.js';
 import { registerSchedulingTools } from './tools/scheduling.js';
 import { registerConvenienceTools } from './tools/convenience.js';
+import { registerIssueTools } from './tools/issues.js';
 import { registerDiffTools } from './tools/diff.js';
 import { VERSION } from './version.js';
 
@@ -46,6 +47,7 @@ export function createJulesMcpServer(deps: JulesServerDeps): McpServer {
     registerActivityTools(server, deps.client);
     registerSchedulingTools(server, deps.manager);
     registerConvenienceTools(server, deps.client);
+    registerIssueTools(server, deps.client);
     registerDiffTools(server, deps.client);
 
     return server;

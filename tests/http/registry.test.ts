@@ -90,10 +90,28 @@ describe('createJulesMcpServer', () => {
         await server.close();
     });
 
-    it('registers all 19 tools, so HTTP and stdio cannot drift apart', async () => {
+    it('registers every tool in src/tools/, so HTTP and stdio cannot drift apart', async () => {
+        // Derived from source rather than hardcoded: a literal count here went
+        // stale within a day of being written, when #50457 landed
+        // jules_create_session_from_issue on main while this branch was open.
+        // The guard that matters is "the factory registers ALL of them", and
+        // that survives the next tool group being added.
+        const { readFileSync, readdirSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const toolsDir = join(import.meta.dirname, '..', '..', 'src', 'tools');
+        const expected = new Set<string>();
+        for (const file of readdirSync(toolsDir)) {
+            if (!file.endsWith('.ts')) continue;
+            const source = readFileSync(join(toolsDir, file), 'utf8');
+            for (const match of source.matchAll(/'(jules_[a-z_]+)'/g)) {
+                expected.add(match[1]);
+            }
+        }
+        expect(expected.size).toBeGreaterThan(0);
+
         const { mcp, server } = await connectedClient();
         const { tools } = await mcp.listTools();
-        expect(tools.length).toBe(19);
+        expect(new Set(tools.map((t) => t.name))).toEqual(expected);
         await server.close();
     });
 
