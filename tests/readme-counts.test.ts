@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { PROMPT_CATALOG } from '../src/prompts/catalog.js';
 
 const ROOT = join(import.meta.dirname, '..');
 const README = readFileSync(join(ROOT, 'README.md'), 'utf8');
@@ -54,6 +55,38 @@ describe('README counts', () => {
         expect(claimed.length).toBeGreaterThanOrEqual(1);
         for (const c of claimed) {
             expect(c).toBe(names.size);
+        }
+    });
+
+    it('prompt count matches the catalog actually registered', () => {
+        const claimed = [...README.matchAll(/\*\*([0-9]+) prompts\*\*/g)].map(
+            (m) => Number(m[1]),
+        );
+        expect(claimed.length).toBeGreaterThanOrEqual(1);
+        for (const c of claimed) {
+            expect(c).toBe(PROMPT_CATALOG.length);
+        }
+    });
+
+    it('documents every prompt in the catalog by name', () => {
+        for (const template of PROMPT_CATALOG) {
+            expect(README).toContain(template.name);
+        }
+    });
+
+    it('counts no prompt as a tool', () => {
+        // The tool count above scans src/tools/ for 'jules_*' literals. Prompts
+        // live in src/prompts/ and are named in kebab-case, so neither
+        // direction of that count can pick them up -- assert it rather than
+        // trusting the directory split to survive a future move.
+        const toolsDir = join(ROOT, 'src', 'tools');
+        const toolSources = readdirSync(toolsDir)
+            .filter((f) => f.endsWith('.ts'))
+            .map((f) => readFileSync(join(toolsDir, f), 'utf8'))
+            .join('\n');
+        for (const template of PROMPT_CATALOG) {
+            expect(toolSources).not.toContain(template.name);
+            expect(template.name).not.toMatch(/^jules_/);
         }
     });
 });

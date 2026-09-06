@@ -14,10 +14,11 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 ```
 
 - **20 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
+- **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are _derived from its own text_, so the two cannot drift apart.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 458 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 490 unit tests, smoke test against the live API.
 
 ---
 
@@ -29,6 +30,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Configuration](#configuration)
 - [Use it with Claude Code](#use-it-with-claude-code)
 - [Tool reference](#tool-reference)
+- [Prompt catalog](#prompt-catalog)
 - [Working with Jules: the lifecycle](#working-with-jules-the-lifecycle)
 - [Reviewing what Jules did](#reviewing-what-jules-did)
 - [Reworking a Jules PR — read this before you force-push](#reworking-a-jules-pr--read-this-before-you-force-push)
@@ -64,7 +66,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 458 unit tests
+npm test           # 490 unit tests
 ```
 
 ## Configuration
@@ -160,6 +162,49 @@ Then ask your assistant things like _"list my Jules sources"_, _"create a Jules 
 | `jules_create_session_from_issue` ✎🔍 | Turn a GitHub issue into a Jules task: fetch title, body, labels and the comment thread, fence all of it, and create a session. **`AUTO_CREATE_PR` is off unless you opt in** — see below.                              | `repo` (`owner/repo`), `issue_number`, `reason`, `source?`, `starting_branch?` (`main`), `title?`, `include_comments?` (true), `max_comments?` (100), `prompt_template?`, `allow_auto_create_pr?` (**false**), `require_plan_approval?` (true), `dry_run?` |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
+
+## Prompt catalog
+
+19 tools is a lot to orchestrate from scratch. The server also exposes MCP **prompts** — pre-written task templates that clients surface as slash commands, so a common workflow is one pick instead of a plan.
+
+**7 prompts**, in two kinds. A `task` prompt renders text destined for the `prompt` argument of `jules_create_session` / `jules_run_task`; an `operation` prompt is a workflow that drives this server's own tools.
+
+| Prompt                     | Kind      | What it does                                                                         | Arguments                                                                        |
+| -------------------------- | --------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `add-tests-for-module`     | task      | Cover one module with tests that each fail when the behaviour they assert is removed | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                       |
+| `fix-failing-ci`           | task      | Diagnose a CI failure from its log and fix the mechanism, smallest change first      | `WORKFLOW_NAME`, `FAILURE_LOG` ⚠, `SOURCE`, `STARTING_BRANCH`                    |
+| `upgrade-dependency`       | task      | Move one package to a target version and adapt only the forced call sites            | `PACKAGE_NAME`, `TARGET_VERSION`, `RELEASE_NOTES` ⚠, `SOURCE`, `STARTING_BRANCH` |
+| `refactor-for-readability` | task      | Restructure a module behind an unchanged interface, keeping rationale comments       | `MODULE_PATH`, `TEST_COMMAND`, `SOURCE`, `STARTING_BRANCH`                       |
+| `write-missing-docs`       | task      | Derive docs from the code, treating existing prose as a claim to verify              | `MODULE_PATH`, `DOC_FILE`, `SOURCE`, `STARTING_BRANCH`                           |
+| `triage-stale-sessions`    | operation | Classify sessions idle past a threshold; archive the ones you name back              | `STALE_AFTER_HOURS`                                                              |
+| `review-session-diff`      | operation | Read a session patch hunk by hunk and return an approve / revise / reject verdict    | `SESSION_ID`                                                                     |
+
+⚠ marks an argument that carries **externally-sourced text**. Those are nonce-fenced with `src/untrusted.ts` before they reach the rendered prompt — see [Fencing untrusted text in prompts](#fencing-untrusted-text-in-prompts).
+
+### Arguments are derived from the template, never declared beside it
+
+A template body carries two kinds of placeholder:
+
+- `<NAME>` — an operator-supplied identifier (a path, a branch, a package name). Substituted inline.
+- `[[NAME]]` — externally-sourced text (a CI log, release notes). Substituted into a nonce fence, with the token itself replaced by a pointer to that fenced block.
+
+`prompts/list` builds each prompt's `arguments` by **scanning its own body for those tokens**. There is no second list to keep in step: adding `<TIMEOUT>` to a body _is_ adding a `TIMEOUT` argument, and the fencing decision for a value follows from the token form rather than from a table someone has to remember to update. The idea comes from [`melbinjp/jules-prompts`](https://github.com/melbinjp/jules-prompts) (MIT); the implementation here is our own.
+
+Every argument is optional, so `prompts/get` with no arguments is a **preview**: unfilled placeholders render as themselves rather than erroring, through the same substitution path a filled render uses.
+
+```
+$ prompts/get add-tests-for-module            # no arguments
+# Add tests for `<MODULE_PATH>`
+...
+4. Run `<TEST_COMMAND>` and leave the suite green.
+
+$ prompts/get add-tests-for-module MODULE_PATH=src/formatters.ts
+# Add tests for `src/formatters.ts`
+...
+4. Run `<TEST_COMMAND>` and leave the suite green.
+```
+
+Templates carry no standing guidance of their own — `jules_create_session` prepends `guidance.md` at creation time, so embedding it in a template would ship it twice. Scope in each template is written as positive enclosure ("ONLY add or extend tests covering …") rather than as a list of prohibitions.
 
 ## Working with Jules: the lifecycle
 
@@ -284,6 +329,8 @@ const prompt = buildFencedPrompt('Fix the bug described below.', [
 
 Each field is wrapped in `<<<BEGIN <LABEL> <NONCE>>>>` / `<<<END <LABEL> <NONCE>>>>` markers, where the nonce is 96 bits of CSPRNG output minted **at prompt-build time** — after whoever wrote the untrusted content wrote it. That is the whole defence: an attacker cannot close a fence whose label did not exist when they were typing. The prompt opens with framing that tells the model the fenced regions are inert data, that instructions inside them are never to be followed, and that a marker carrying a different token is forged.
 
+The [prompt catalog](#prompt-catalog) routes through this automatically: a `[[NAME]]` placeholder in a template body is fenced when a value is supplied, and the token itself becomes a pointer to the fenced block. That is the only difference between the two placeholder forms, and it is derived from the body rather than declared beside it.
+
 **The content is passed through byte-identical.** No NFKC normalization, no stripping, no neutralizing of phrases like "ignore previous instructions" — the fence is lossless on purpose. Rewriting the payload would have to enumerate every escape correctly to be sound, and it mangles legitimate text: a security advisory, a diff, or a code block quoting those phrases comes out altered. (Stripping zero-width/bidi/ANSI characters is still worth doing for _display_ safety. It is a different job; do not fold it into the fence.)
 
 > **Scope limit — fencing closes the first hop only.** Jules fetches URLs it finds in a prompt (measured 2026-08-31, above). A URL inside a fenced block therefore still reaches Jules through a channel the fence does not touch: the fence governs what we _send_, not what Jules _retrieves_. The framing asks the model not to follow those links, which is a request, not a control. Anything built on attacker-writable text needs a scope bound as well — restrict which repos a session may write to, and prefer stopping at a reviewable patch (`jules_pull_session`) over `AUTO_CREATE_PR`.
@@ -368,6 +415,10 @@ src/
 ├── untrusted.ts          # nonce-fenced envelopes for untrusted prompt input
 ├── github.ts             # read-only GitHub REST reader (issues + comments)
 ├── retry.ts              # idempotency-aware retry policy (backoff, jitter, Retry-After)
+├── prompts/
+│   ├── template.ts       # placeholder scan, derived arguments, render + fence
+│   ├── catalog.ts        # the 7 task/operation templates
+│   └── register.ts       # prompts/list + prompts/get handlers
 ├── scheduler/
 │   ├── cron.ts           # node-cron manager
 │   └── persistence.ts    # AES-256-GCM encrypted schedule store
@@ -389,7 +440,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (458 tests)
+npm test             # vitest run (490 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
