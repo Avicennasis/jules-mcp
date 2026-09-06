@@ -26,6 +26,7 @@ import { registerSchedulingTools } from './tools/scheduling.js';
 import { registerConvenienceTools } from './tools/convenience.js';
 import { registerIssueTools } from './tools/issues.js';
 import { registerDiffTools } from './tools/diff.js';
+import { registerPrompts } from './prompts/register.js';
 import { VERSION } from './version.js';
 
 export interface JulesServerDeps {
@@ -49,6 +50,11 @@ export function createJulesMcpServer(deps: JulesServerDeps): McpServer {
     registerConvenienceTools(server, deps.client);
     registerIssueTools(server, deps.client);
     registerDiffTools(server, deps.client);
+
+    // Prompt templates (#50429). Registered here rather than in the entrypoint
+    // so both transports advertise the prompts capability: it is part of the
+    // initialize response, and this runs before any connect().
+    registerPrompts(server);
 
     return server;
 }
