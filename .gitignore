@@ -5,3 +5,12 @@ dist/
 
 # Feature Factory context files — local only, never committed
 .stargazer-*
+
+# Agent worktrees (Claude Code `isolation: worktree`) — live INSIDE the repo,
+# so without this they show as untracked and one `git add -A` stages entire
+# checkouts. They also break a bare `npm test`: vitest's default glob collects
+# every worktree's tests/, so the count reads N x the real suite (measured
+# 2026-09-05: 1990 tests across 100 files, against a true 398 across 20).
+# Scope a count with `npx vitest run --exclude '**/.claude/**'` while any
+# worktree exists. Matches the convention already in ClaudeCode/.gitignore.
+.claude/worktrees/
