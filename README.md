@@ -18,7 +18,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 607 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 615 unit tests, smoke test against the live API.
 
 ---
 
@@ -68,7 +68,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 607 unit tests
+npm test           # 615 unit tests
 ```
 
 ## Configuration
@@ -594,7 +594,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (607 tests)
+npm test             # vitest run (615 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -625,10 +625,10 @@ Failed requests are retried automatically — **twice by default**, with exponen
 | `429 Too Many Requests` | retried                                       | **retried**      |
 | `5xx`                   | retried                                       | not retried      |
 | Network failure         | retried                                       | not retried      |
-| Request timeout         | not retried                                   | not retried      |
+| Request timeout         | retried                                       | not retried      |
 | Any other `4xx`         | not retried                                   | not retried      |
 
-A `429` means the request was **rejected without being processed**, so replaying it is safe for any method. A `5xx` or a dropped socket is **ambiguous** — the session may already have been created — and Jules offers no idempotency key, so replaying a `POST /sessions` can double-create and burn quota whose daily ceiling is unmeasured. A timeout is our own deadline expiring rather than the server's advice, so retrying it would multiply a wall-clock the caller already bounded.
+A `429` means the request was **rejected without being processed**, so replaying it is safe for any method. A `5xx`, a dropped socket, or a request timeout is **ambiguous** — the session may already have been created — and Jules offers no idempotency key, so replaying a `POST /sessions` can double-create and burn quota whose daily ceiling is unmeasured. A timeout expiring on _our_ side says nothing about whether the server processed the request, which is why it sits with the other ambiguous failures rather than counting as a verdict: a slow read gets a second chance, a slow create does not. If total wall-clock matters more than a retried read, lower `retries` or raise `requestTimeoutMs` — both say what they do, which a silently multiplied deadline does not.
 
 A `Retry-After` longer than `retryMaxDelayMs` (30s default) is **not** slept through — the error is surfaced with its `retryAfter` instead, because blocking an MCP tool call for an hour is worse than failing and letting the caller decide. Our own exponential term is clamped to that ceiling rather than declined.
 
