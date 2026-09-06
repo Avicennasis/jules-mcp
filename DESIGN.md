@@ -425,7 +425,7 @@ carrying an `Origin` is rejected unless it was named.
 LICENSE read directly, ideas only, no code copied): the 405-for-GET insight,
 and the shape of keeping the transport a thin module over the same tool
 implementation the stdio server uses. One correction to the ticket: the SDK's
-own `StreamableHTTPServerTransport` does *not* return 405 for GET — its
+own `StreamableHTTPServerTransport` does _not_ return 405 for GET — its
 `handleGetRequest` opens an SSE stream — so the 405 has to come from our handler
 ahead of it.
 

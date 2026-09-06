@@ -121,13 +121,13 @@ node dist/index.js --transport http     # or JULES_MCP_TRANSPORT=http
 
 That serves one MCP endpoint at `http://127.0.0.1:9673/mcp`:
 
-| Method    | Response                                                                    |
-| --------- | --------------------------------------------------------------------------- |
-| `POST`    | `application/json` JSON-RPC response; **202 with no body** for notifications |
-| `GET`     | **405 Method Not Allowed** — the deliberate "no SSE stream here" signal      |
-| `DELETE`  | Session teardown (404 if the session id is unknown)                         |
-| `OPTIONS` | 204 preflight, only for an allowlisted `Origin`                             |
-| anything else | 405                                                                     |
+| Method        | Response                                                                     |
+| ------------- | ---------------------------------------------------------------------------- |
+| `POST`        | `application/json` JSON-RPC response; **202 with no body** for notifications |
+| `GET`         | **405 Method Not Allowed** — the deliberate "no SSE stream here" signal      |
+| `DELETE`      | Session teardown (404 if the session id is unknown)                          |
+| `OPTIONS`     | 204 preflight, only for an allowlisted `Origin`                              |
+| anything else | 405                                                                          |
 
 Point a client at it with a bearer token:
 
@@ -169,16 +169,16 @@ Two details worth knowing if you read the SDK:
 
 ### Configuration
 
-| Variable                          | Required | Default     | Purpose                                                                             |
-| --------------------------------- | -------- | ----------- | ----------------------------------------------------------------------------------- |
-| `JULES_MCP_TRANSPORT`             | no       | `stdio`     | `stdio` or `http`. `--transport http` overrides it.                                 |
-| `JULES_MCP_HTTP_TOKEN`            | **yes**  | —           | Bearer token. **No unauthenticated mode exists**; the server refuses to start.      |
-| `JULES_MCP_HTTP_HOST`             | no       | `127.0.0.1` | Bind address.                                                                       |
-| `JULES_MCP_HTTP_PORT`             | no       | `9673`      | Bind port.                                                                          |
-| `JULES_MCP_HTTP_PATH`             | no       | `/mcp`      | The single endpoint path. Everything else is 404.                                   |
-| `JULES_MCP_HTTP_ALLOWED_ORIGINS`  | no       | _(none)_    | Comma-separated exact origins. `*` is rejected at startup.                          |
-| `JULES_MCP_HTTP_PROXY_SECRET`     | no       | _(unset)_   | Enables the proxy-identity path. Unset means that path does not exist.               |
-| `JULES_MCP_HTTP_MAX_BODY_BYTES`   | no       | `1048576`   | Hard cap on request body size, enforced as bytes arrive.                            |
+| Variable                         | Required | Default     | Purpose                                                                        |
+| -------------------------------- | -------- | ----------- | ------------------------------------------------------------------------------ |
+| `JULES_MCP_TRANSPORT`            | no       | `stdio`     | `stdio` or `http`. `--transport http` overrides it.                            |
+| `JULES_MCP_HTTP_TOKEN`           | **yes**  | —           | Bearer token. **No unauthenticated mode exists**; the server refuses to start. |
+| `JULES_MCP_HTTP_HOST`            | no       | `127.0.0.1` | Bind address.                                                                  |
+| `JULES_MCP_HTTP_PORT`            | no       | `9673`      | Bind port.                                                                     |
+| `JULES_MCP_HTTP_PATH`            | no       | `/mcp`      | The single endpoint path. Everything else is 404.                              |
+| `JULES_MCP_HTTP_ALLOWED_ORIGINS` | no       | _(none)_    | Comma-separated exact origins. `*` is rejected at startup.                     |
+| `JULES_MCP_HTTP_PROXY_SECRET`    | no       | _(unset)_   | Enables the proxy-identity path. Unset means that path does not exist.         |
+| `JULES_MCP_HTTP_MAX_BODY_BYTES`  | no       | `1048576`   | Hard cap on request body size, enforced as bytes arrive.                       |
 
 Both secrets must be at least 32 characters.
 
@@ -198,7 +198,7 @@ What this implementation does about it:
   method is dispatched and before the body is parsed. `OPTIONS` preflights are
   the sole exception and they reach nothing.
 - **Authentication is not gated on the bind address, and no security decision
-  reads the peer address.** A loopback bind is *not* a containment boundary on
+  reads the peer address.** A loopback bind is _not_ a containment boundary on
   a machine where a relay might front it: `socat` re-originates connections, so
   the backend sees `127.0.0.1` as the peer for every relayed request and "is
   the caller local?" answers yes for everything behind the relay (Redmine
@@ -227,7 +227,7 @@ What this implementation does about it:
 
 **What still is not bounded:** any holder of `JULES_MCP_HTTP_TOKEN` can call
 every tool, including `jules_create_session` and `jules_delete_session`. There
-is no per-tool authorization, no rate limiting, and no audit of *which* HTTP
+is no per-tool authorization, no rate limiting, and no audit of _which_ HTTP
 principal made a call beyond the stderr session log — `emitAudit()` records the
 `reason` a tool was given, not the transport identity. Treat the token as
 equivalent to the Jules API key itself. Do not put this transport on a shared

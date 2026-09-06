@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     secret configured that path is disabled rather than trusted; `Origin` is
     exact-match validated and a wildcard is refused at startup; an unknown
     `Mcp-Session-Id` is 404, never a silent new session; request bodies are
-    capped. What is *not* bounded: any token holder can call every tool. See
+    capped. What is _not_ bounded: any token holder can call every tool. See
     the README's "Security note — read this before exposing it".
 
 - `SessionState` is now an **open union**, and `jules_run_task` stops on states
