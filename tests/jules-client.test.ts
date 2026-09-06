@@ -498,27 +498,55 @@ describe('JulesClient retry', () => {
         expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('never retries a timeout, even on GET', async () => {
+    // #50447, operator decision 2026-09-06: a timeout retries on idempotent
+    // methods and not otherwise. These drive it through the real request path,
+    // where the timeout flag is derived from the rejection rather than passed.
+    it('retries a timed-out GET and succeeds on the second attempt', async () => {
+        mockFetch
+            .mockRejectedValueOnce(
+                new DOMException('timed out', 'TimeoutError'),
+            )
+            .mockResolvedValueOnce(jsonResponse({ name: 'sessions/1' }));
+
+        const session = await retrying().getSession('sessions/1');
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(session.name).toBe('sessions/1');
+        expect(slept).toEqual([100]);
+    });
+
+    // The half that must not move. A timed-out create may already have made a
+    // session and Jules has no idempotency key, so the client must not replay
+    // it — the deadline expiring on our side says nothing about the server's.
+    it('does NOT retry a timed-out POST /sessions', async () => {
         mockFetch.mockRejectedValue(
             new DOMException('timed out', 'TimeoutError'),
         );
 
-        await expect(retrying().getSession('sessions/1')).rejects.toThrow();
+        await expect(
+            retrying().createSession({
+                prompt: 'p',
+                sourceContext: { source: 'sources/github/o/r' },
+            }),
+        ).rejects.toThrow();
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(slept).toEqual([]);
     });
 
-    // The discriminating one: a runtime that reports the deadline as a
-    // TypeError makes the request look like BOTH a timeout and a retryable
-    // network failure on an idempotent method. Timeout has to win. Without
-    // this the timeout rule is dead code — a bare timeout is already
-    // unretryable for want of any retryable signal.
-    it('never retries a timeout surfaced as a TypeError', async () => {
+    // A runtime that reports the deadline as a TypeError makes the request look
+    // like both a timeout and a network failure. On a POST both paths must
+    // still refuse, so neither label can smuggle in a replay.
+    it('does NOT retry a POST timeout surfaced as a TypeError', async () => {
         const err = new TypeError('fetch failed');
         err.name = 'TimeoutError';
         mockFetch.mockRejectedValue(err);
 
-        await expect(retrying().getSession('sessions/1')).rejects.toThrow();
+        await expect(
+            retrying().createSession({
+                prompt: 'p',
+                sourceContext: { source: 'sources/github/o/r' },
+            }),
+        ).rejects.toThrow();
         expect(mockFetch).toHaveBeenCalledTimes(1);
         expect(slept).toEqual([]);
     });

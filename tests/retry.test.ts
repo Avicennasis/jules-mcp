@@ -100,32 +100,54 @@ describe('planRetry — failures that must never be replayed', () => {
         },
     );
 
-    // A timeout is our own deadline expiring, not the server asking us to
-    // wait. Retrying multiplies the wall-clock the caller already bounded.
-    //
-    // These assert PRECEDENCE, which is the whole content of the rule: a bare
-    // `{timeout: true}` with no status and no network flag is already
-    // unretryable for want of a retryable signal, so deleting the timeout guard
-    // passes that version of the test. Verified by mutation. The cases that
-    // discriminate are a timeout arriving ALONGSIDE something otherwise
-    // retryable — which is exactly how a runtime that reports a timeout as a
-    // TypeError presents it.
-    it('does not retry a timeout that also looks like a network error', () => {
+    // A timeout retries for IDEMPOTENT METHODS ONLY (#50447, operator decision
+    // 2026-09-06 overruling #50643's blanket never-retry). A slow read is worth
+    // a second chance; a slow POST is the double-submit hazard, because a
+    // deadline that expires client-side says nothing about whether the server
+    // processed the request. That is the same ambiguity as a 5xx or a dropped
+    // socket, and it gets the same answer.
+    it('retries a timeout on GET', () => {
         expect(
             planRetry({
                 method: 'GET',
                 timeout: true,
-                networkError: true,
                 attempt: 0,
                 maxRetries: 3,
             }).retry,
-        ).toBe(false);
+        ).toBe(true);
     });
 
-    it('does not retry a timeout that also carries a 429', () => {
+    it.each(['HEAD', 'OPTIONS', 'PUT', 'DELETE'])(
+        'retries a timeout on %s',
+        (method) => {
+            expect(
+                planRetry({ method, timeout: true, attempt: 0, maxRetries: 3 })
+                    .retry,
+            ).toBe(true);
+        },
+    );
+
+    // The half that must NOT change. A timed-out create may already have made a
+    // session, and Jules has no idempotency key.
+    it.each(['POST', 'PATCH'])(
+        'does NOT retry a timeout on %s — it may already have landed',
+        (method) => {
+            expect(
+                planRetry({ method, timeout: true, attempt: 0, maxRetries: 3 })
+                    .retry,
+            ).toBe(false);
+        },
+    );
+
+    // Precedence guard. A timeout means no response arrived, so a status
+    // riding alongside it is not a server verdict -- the 429 fast path (safe
+    // for every method) must not unlock a timed-out POST. Without this, a
+    // predicate written as `status === 429 || ...` retries the exact case the
+    // idempotency split exists to prevent.
+    it('a 429 alongside a timeout does NOT unlock a POST retry', () => {
         expect(
             planRetry({
-                method: 'GET',
+                method: 'POST',
                 timeout: true,
                 status: 429,
                 attempt: 0,
@@ -134,15 +156,29 @@ describe('planRetry — failures that must never be replayed', () => {
         ).toBe(false);
     });
 
-    it('does not retry a bare timeout either', () => {
+    it('still respects the retry budget for timeouts', () => {
         expect(
             planRetry({
                 method: 'GET',
                 timeout: true,
-                attempt: 0,
+                attempt: 3,
                 maxRetries: 3,
             }).retry,
         ).toBe(false);
+    });
+
+    // A timeout carries no Retry-After, so it backs off exponentially like any
+    // other ambiguous failure rather than getting its own schedule.
+    it('backs a timeout off exponentially', () => {
+        expect(
+            planRetry({
+                method: 'GET',
+                timeout: true,
+                attempt: 1,
+                maxRetries: 3,
+                ...det,
+            }).delayMs,
+        ).toBe(200 + 100);
     });
 
     it('stops once the retry budget is spent', () => {
