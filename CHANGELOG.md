@@ -75,6 +75,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers 404 for repos you cannot see, so a private repo and a missing issue
   are indistinguishable.
 
+- **Opt-in streamable-HTTP transport.** `--transport http` (or
+  `JULES_MCP_TRANSPORT=http`) serves one MCP endpoint at
+  `http://127.0.0.1:9673/mcp`: `POST` returns `application/json`, notifications
+  return 202 with no body, `DELETE` tears a session down, and `GET` returns
+  **405** — the MCP spec's stated alternative to offering the optional SSE
+  stream. The official SDK client treats that 405 as a clean no-op and
+  continues POST-only, which `tests/http/no-sse.test.ts` proves by driving a
+  real `StreamableHTTPClientTransport` against the real handler.
+
+    stdio remains the default and is unchanged; `npm start` behaves exactly as
+    before. Tool registration moved to `src/server-factory.ts` so both
+    transports build from one registry — the HTTP transport creates one MCP
+    server per session, sharing the Jules client, scheduler and source-config
+    store.
+
+    **Security posture, stated plainly** (Redmine #50638, with the anti-patterns
+    from #50652 and #50775): authentication is unconditional and precedes
+    dispatch, `JULES_MCP_HTTP_TOKEN` is required and there is no
+    unauthenticated mode; no security decision reads a peer address, because a
+    `socat` relay re-originates connections and makes `127.0.0.1` meaningless
+    as evidence (#50662); a proxy-supplied `X-Forwarded-User` is honoured only
+    alongside a constant-time-compared `X-Forwarded-Auth-Secret`, and with no
+    secret configured that path is disabled rather than trusted; `Origin` is
+    exact-match validated and a wildcard is refused at startup; an unknown
+    `Mcp-Session-Id` is 404, never a silent new session; request bodies are
+    capped. What is _not_ bounded: any token holder can call every tool. See
+    the README's "Security note — read this before exposing it".
+
 - `SessionState` is now an **open union**, and `jules_run_task` stops on states
   it does not recognise instead of polling them to the deadline.
 

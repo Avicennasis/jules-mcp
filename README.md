@@ -18,7 +18,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 490 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 576 unit tests, smoke test against the live API.
 
 ---
 
@@ -29,6 +29,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - [Install](#install)
 - [Configuration](#configuration)
 - [Use it with Claude Code](#use-it-with-claude-code)
+- [Streamable-HTTP transport (opt-in)](#streamable-http-transport-opt-in)
 - [Tool reference](#tool-reference)
 - [Prompt catalog](#prompt-catalog)
 - [Working with Jules: the lifecycle](#working-with-jules-the-lifecycle)
@@ -66,7 +67,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 490 unit tests
+npm test           # 576 unit tests
 ```
 
 ## Configuration
@@ -111,6 +112,132 @@ Register it as an MCP server (e.g. in a project's `.claude/settings.json` or you
 ```
 
 Then ask your assistant things like _"list my Jules sources"_, _"create a Jules task on owner/repo to add tests for X"_, or _"show me the diff Jules produced for session 123"_.
+
+## Streamable-HTTP transport (opt-in)
+
+**stdio is the default and nothing about it changed.** `npm start` with no new
+environment variables behaves exactly as it did before this transport existed.
+You get HTTP only by asking for it.
+
+```bash
+export JULES_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+node dist/index.js --transport http     # or JULES_MCP_TRANSPORT=http
+```
+
+That serves one MCP endpoint at `http://127.0.0.1:9673/mcp`:
+
+| Method        | Response                                                                     |
+| ------------- | ---------------------------------------------------------------------------- |
+| `POST`        | `application/json` JSON-RPC response; **202 with no body** for notifications |
+| `GET`         | **405 Method Not Allowed** — the deliberate "no SSE stream here" signal      |
+| `DELETE`      | Session teardown (404 if the session id is unknown)                          |
+| `OPTIONS`     | 204 preflight, only for an allowlisted `Origin`                              |
+| anything else | 405                                                                          |
+
+Point a client at it with a bearer token:
+
+```json
+{
+    "mcpServers": {
+        "jules": {
+            "type": "http",
+            "url": "http://127.0.0.1:9673/mcp",
+            "headers": { "Authorization": "Bearer ${JULES_MCP_HTTP_TOKEN}" }
+        }
+    }
+}
+```
+
+### Why GET returns 405
+
+The MCP spec (2025-06-18, _Transports → Listening for Messages from the
+Server_) says the server **MUST** either return `Content-Type:
+text/event-stream` for a GET on the MCP endpoint **or** return 405, "indicating
+that the server does not offer an SSE stream at this endpoint". We do not offer
+one, and 405 is how the spec says so. The official `@modelcontextprotocol/sdk`
+client handles it as a clean no-op (`if (response.status === 405) { return; }`)
+and continues POST-only, so no functionality is lost — jules-mcp has no
+server-initiated notifications to push.
+
+Two details worth knowing if you read the SDK:
+
+- The SDK's own `StreamableHTTPServerTransport` does **not** do this. Its
+  `handleGetRequest` opens an SSE stream. The 405 is produced by our handler,
+  ahead of the SDK transport. Everything else — Accept-header rules, the
+  202-for-notifications rule, protocol-version negotiation, JSON-RPC framing —
+  is the SDK's.
+- The client only attempts that GET after `notifications/initialized` is
+  accepted, and routes failures to `onerror` rather than throwing.
+  `tests/http/no-sse.test.ts` drives a real SDK client against the real handler
+  to prove both halves, so the claim is checked against the pinned SDK on every
+  test run rather than trusted.
+
+### Configuration
+
+| Variable                         | Required | Default     | Purpose                                                                        |
+| -------------------------------- | -------- | ----------- | ------------------------------------------------------------------------------ |
+| `JULES_MCP_TRANSPORT`            | no       | `stdio`     | `stdio` or `http`. `--transport http` overrides it.                            |
+| `JULES_MCP_HTTP_TOKEN`           | **yes**  | —           | Bearer token. **No unauthenticated mode exists**; the server refuses to start. |
+| `JULES_MCP_HTTP_HOST`            | no       | `127.0.0.1` | Bind address.                                                                  |
+| `JULES_MCP_HTTP_PORT`            | no       | `9673`      | Bind port.                                                                     |
+| `JULES_MCP_HTTP_PATH`            | no       | `/mcp`      | The single endpoint path. Everything else is 404.                              |
+| `JULES_MCP_HTTP_ALLOWED_ORIGINS` | no       | _(none)_    | Comma-separated exact origins. `*` is rejected at startup.                     |
+| `JULES_MCP_HTTP_PROXY_SECRET`    | no       | _(unset)_   | Enables the proxy-identity path. Unset means that path does not exist.         |
+| `JULES_MCP_HTTP_MAX_BODY_BYTES`  | no       | `1048576`   | Hard cap on request body size, enforced as bytes arrive.                       |
+
+Both secrets must be at least 32 characters.
+
+### Security note — read this before exposing it
+
+This process holds a `JULES_API_KEY` with write access to every connected
+source. **An HTTP surface in front of tool dispatch inherits that key's full
+authority.** Two community Jules servers shipped exactly that mistake: one bound
+`0.0.0.0` with no auth and dispatched through a `globals()` lookup (Redmine
+#50652), and one deployed a public unauthenticated `POST /mcp/execute` that
+forwarded request bodies straight to Jules with the deployer's own key (#50775).
+
+What this implementation does about it:
+
+- **Authentication is unconditional and precedes dispatch.** Every request —
+  `POST`, `GET`, `DELETE`, any path, any peer — is authenticated before the
+  method is dispatched and before the body is parsed. `OPTIONS` preflights are
+  the sole exception and they reach nothing.
+- **Authentication is not gated on the bind address, and no security decision
+  reads the peer address.** A loopback bind is _not_ a containment boundary on
+  a machine where a relay might front it: `socat` re-originates connections, so
+  the backend sees `127.0.0.1` as the peer for every relayed request and "is
+  the caller local?" answers yes for everything behind the relay (Redmine
+  #50662). The non-loopback bind warning is an operator courtesy, nothing more.
+- **A proxy-supplied identity requires a shared secret.** `X-Forwarded-User` is
+  honoured only when `X-Forwarded-Auth-Secret` matches
+  `JULES_MCP_HTTP_PROXY_SECRET`, compared in constant time. With no secret
+  configured the proxy path is disabled outright rather than trusting the
+  header — the forwarded headers are then inert.
+- **Origin is validated and CORS is never wildcarded.** The allowlist is exact
+  match; a configured `*` is refused at startup. With no allowlist (the
+  default) any request carrying an `Origin` is rejected 403, which is the
+  DNS-rebinding defence the spec asks for. A request with **no** `Origin`
+  header is allowed through to the auth gate — non-browser clients do not send
+  one, and the bearer check is what stops them.
+- **Dispatch is an explicit registry.** Both transports build their server from
+  `createJulesMcpServer`, so a name that is not a registered `jules_*` tool is
+  not callable. There is no fallback path, no leniency branch for expired
+  session ids, and no second entry point.
+- **Sessions are validated, not decorative.** An unknown `Mcp-Session-Id` is a
+  404 and the client must re-initialize; it is never silently upgraded into a
+  fresh session.
+- **Concurrent requests are served concurrently.** Node's HTTP server is
+  event-driven and each session's requests are awaited independently, so a long
+  `jules_run_task` poll does not block other clients.
+
+**What still is not bounded:** any holder of `JULES_MCP_HTTP_TOKEN` can call
+every tool, including `jules_create_session` and `jules_delete_session`. There
+is no per-tool authorization, no rate limiting, and no audit of _which_ HTTP
+principal made a call beyond the stderr session log — `emitAudit()` records the
+`reason` a tool was given, not the transport identity. Treat the token as
+equivalent to the Jules API key itself. Do not put this transport on a shared
+host, a tailnet, or behind a relay without deciding, deliberately, that
+everything which can reach it may act as you on every connected repository.
 
 ## Tool reference
 
@@ -405,7 +532,13 @@ Each of these was observed directly, not inferred from documentation or from ano
 
 ```
 src/
-├── index.ts              # entry point: wires tools + scheduler, stdio transport
+├── index.ts              # entry point: wires scheduler, selects a transport
+├── server-factory.ts     # the one place tools are registered (both transports)
+├── http/
+│   ├── config.ts         # env parsing, transport selection, fail-closed checks
+│   ├── guards.ts         # constant-time auth + Origin validation (header-only)
+│   ├── handler.ts        # path/Origin/auth/method gate ahead of dispatch
+│   └── server.ts         # session router + node:http wiring
 ├── jules-client.ts       # typed HTTP client for the Jules API
 ├── types.ts              # types matching the Jules wire format
 ├── errors.ts             # structured error classes
@@ -440,7 +573,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (490 tests)
+npm test             # vitest run (576 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -491,7 +624,8 @@ new JulesClient(key, {
 
 ## Roadmap
 
-- Remote streamable-HTTP deployment (Cloudflare Workers or similar)
+- ~~Streamable-HTTP transport~~ — done, opt-in; see [Streamable-HTTP transport](#streamable-http-transport-opt-in)
+- Remote deployment (Cloudflare Workers or similar) — needs per-tool authorization and rate limiting first
 - npm publish
 - Source auto-selection when only one is connected
 - ~~Bulk session creation from a task list~~ — done via `parallel` param on `jules_run_task`
