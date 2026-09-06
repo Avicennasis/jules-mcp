@@ -16,6 +16,7 @@ import {
 import { JulesAPIError, JulesStateError } from '../errors.js';
 import { loadGuidance, applyGuidance } from '../guidance.js';
 import { guardPageToken, guardPaginationDeadline } from '../pagination.js';
+import { checkSourceAllowed } from '../allowlist.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -89,6 +90,25 @@ export function registerSessionTools(
             dry_run,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
+
+            // #50432: bound WHICH REPO this may touch, before anything is
+            // created. dry_run is a preview, not an exemption -- a denied repo
+            // is refused in both modes so the preview cannot become the
+            // rehearsal for a request that would be refused anyway.
+            const allowlist = process.env.JULES_ALLOWED_REPOS;
+            const gate = checkSourceAllowed(normalizedSource, allowlist);
+            if (!gate.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: normalizedSource,
+                    reason,
+                    payload: { denied_by: 'allowlist', repo: gate.repo },
+                });
+                return errorResponse(new JulesAPIError(gate.message, 403));
+            }
+
             const body = {
                 // Treat undefined as opt-in rather than leaning on the zod
                 // default: callers that bypass schema parsing must still get

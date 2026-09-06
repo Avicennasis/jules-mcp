@@ -4,6 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ScheduleManager } from '../scheduler/cron.js';
 import { emitAudit } from '../audit.js';
 import { JulesAPIError } from '../errors.js';
+import { checkSourceAllowed } from '../allowlist.js';
+import { normalizeResourceName } from '../types.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -70,6 +72,29 @@ export function registerSchedulingTools(
             reason,
             dry_run,
         }) => {
+            // #50432: bound WHICH REPO this may touch, before the schedule is
+            // stored. A schedule is worse than a one-shot here -- it re-fires,
+            // so an unbounded one keeps targeting the wrong repo daily. Checked
+            // before the cron validation so a denied repo is refused even when
+            // the expression is also bad; dry_run is a preview, not an
+            // exemption.
+            const allowlist = process.env.JULES_ALLOWED_REPOS;
+            const gate = checkSourceAllowed(
+                normalizeResourceName(source, 'sources'),
+                allowlist,
+            );
+            if (!gate.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: normalizeResourceName(source, 'sources'),
+                    reason,
+                    payload: { denied_by: 'allowlist', repo: gate.repo, label },
+                });
+                return errorResponse(new JulesAPIError(gate.message, 403));
+            }
+
             const input = {
                 label,
                 cron: cronExpr,

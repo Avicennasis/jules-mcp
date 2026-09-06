@@ -39,6 +39,7 @@ import { formatSession } from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
 import { loadGuidance, applyGuidance } from '../guidance.js';
 import { buildFencedPrompt, type UntrustedField } from '../untrusted.js';
+import { isRepoAllowed } from '../allowlist.js';
 import {
     fetchIssue,
     parseRepo,
@@ -80,32 +81,11 @@ function errorResponse(error: unknown) {
     };
 }
 
-/**
- * Test `repo` against a `JULES_ALLOWED_REPOS`-style list.
- *
- * Comma-separated, case-insensitive, supporting `owner/*` and a bare `*`. An
- * unset or blank list means no restriction, so the tool stays usable out of the
- * box — the same backward-compatible default #50432 specifies.
- *
- * The wildcard compares the whole owner segment, never a prefix: `avic/*` must
- * not hand `avicious/x` an allowance, because that is a different account.
- */
-export function isRepoAllowed(repo: string, raw: string | undefined): boolean {
-    const entries = (raw ?? '')
-        .split(',')
-        .map((e) => e.trim().toLowerCase())
-        .filter((e) => e !== '');
-    if (entries.length === 0) return true;
-
-    const target = repo.trim().toLowerCase();
-    const owner = target.split('/')[0];
-    return entries.some(
-        (entry) =>
-            entry === '*' ||
-            entry === target ||
-            (entry.endsWith('/*') && entry.slice(0, -2) === owner),
-    );
-}
+// The allowlist lives in src/allowlist.ts and is enforced on every tool that
+// creates or schedules a session (#50432). It was implemented here first as
+// the slice #50457 needed; re-exported so this module's existing callers and
+// tests keep their import site.
+export { isRepoAllowed };
 
 function renderTemplate(
     template: string,

@@ -8,6 +8,7 @@ import { SourceConfigStore } from './source-config.js';
 import { createJulesMcpServer } from './server-factory.js';
 import { loadHttpConfig, resolveTransportMode } from './http/config.js';
 import { startHttpTransport } from './http/server.js';
+import { describeAllowlist } from './allowlist.js';
 
 const apiKey = process.env.JULES_API_KEY;
 if (!apiKey) {
@@ -24,6 +25,14 @@ const store = new ScheduleStore(encryptionKey);
 const manager = new ScheduleManager(store, client);
 const sourceConfig = new SourceConfigStore();
 const deps = { client, manager, sourceConfig };
+
+// #50432: state the repository bound, or its absence, once at startup. An
+// absent guardrail is invisible and reads exactly like a working one, so the
+// unset case is the one that most needs saying out loud. stderr, because
+// stdout belongs to the stdio transport.
+console.error(
+    `[jules-mcp] ${describeAllowlist(process.env.JULES_ALLOWED_REPOS)}`,
+);
 
 // Start scheduler
 manager.start();
