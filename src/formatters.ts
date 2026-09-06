@@ -14,7 +14,12 @@ import type {
  */
 export const UNKNOWN_SOURCE = '(not reported by the API)';
 
-const STATE_DESCRIPTIONS: Record<SessionState, string> = {
+/**
+ * Keyed by `string`, not `SessionState`: that union is open (#50647), so a
+ * `Record<SessionState, string>` would demand an entry for every string in
+ * existence. The `??` in describeState is the real handler for anything absent.
+ */
+const STATE_DESCRIPTIONS: Record<string, string> = {
     STATE_UNSPECIFIED: 'Unknown state',
     QUEUED: 'Queued — waiting to start',
     PLANNING: 'Planning — Jules is analyzing the task',
@@ -26,6 +31,18 @@ const STATE_DESCRIPTIONS: Record<SessionState, string> = {
     PAUSED: 'Paused',
     FAILED: 'Failed — the task encountered an error',
     COMPLETED: 'Completed successfully',
+
+    // Legacy / in-the-wild names (#50647). Marked so a reader seeing one knows
+    // it is an older vocabulary rather than something we invented.
+    PENDING: 'Queued — waiting to start (legacy name for QUEUED)',
+    RUNNING: 'In progress — Jules is working (legacy name for IN_PROGRESS)',
+    AWAITING_USER_INPUT:
+        'Awaiting feedback — Jules needs your input to continue (legacy name for AWAITING_USER_FEEDBACK)',
+    CANCELLED: 'Cancelled (legacy) — the session was stopped before finishing',
+    CANCELED:
+        'Cancelled (legacy, single-L spelling) — the session was stopped before finishing',
+    COMPLETED_UNKNOWN:
+        'Completed, outcome not reported (legacy) — finished, but the API did not say how',
 };
 
 export function describeState(state: SessionState): string {

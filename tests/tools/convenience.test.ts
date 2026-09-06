@@ -294,3 +294,123 @@ describe('jules_run_task with a PAUSED session (#50)', () => {
         }
     });
 });
+
+// --- States outside the known vocabulary (#50647, #50777) ---
+//
+// The poll loop used to continue on anything not in TERMINAL_STATES, which was
+// exactly {COMPLETED, FAILED}. A session in CANCELED or COMPLETED_UNKNOWN is
+// FINISHED, matches none of the three named short-circuits, and so polled until
+// the 600s deadline and was then reported as a `timeout` — the user waits ten
+// minutes and is then told the wrong thing. That is the #50 hazard the PAUSED
+// short-circuit was added for, arriving through a name nobody listed.
+//
+// Four surveyed repos gave four disagreeing vocabularies, several of them
+// guesses, so the enumeration cannot be finished by collecting names. These
+// assert the DEFAULT BRANCH is safe: promptness is measured as "getSession was
+// never called", which no amount of deadline tuning can fake.
+
+describe('run_task — states outside the known vocabulary', () => {
+    function harness(initialState: string, laterStates: string[] = []) {
+        const registeredTools = new Map<string, { handler: Function }>();
+        const mockServer: any = {
+            tool: vi.fn(
+                (name: string, _d: string, _s: any, handler: Function) =>
+                    void registeredTools.set(name, { handler }),
+            ),
+        };
+        const make = (state: string): Session =>
+            ({
+                name: 'sessions/x',
+                id: 'x',
+                prompt: 'p',
+                sourceContext: { source: 's' },
+                state,
+                createTime: '',
+                updateTime: '',
+                url: 'https://jules/x',
+            }) as Session;
+
+        let i = 0;
+        const getSession = vi.fn().mockImplementation(async () => {
+            const s = laterStates[Math.min(i, laterStates.length - 1)];
+            i++;
+            return make(s ?? initialState);
+        });
+        const client: Partial<JulesClient> = {
+            createSession: vi.fn().mockResolvedValue(make(initialState)),
+            getSession,
+            approvePlan: vi.fn(),
+        };
+        registerConvenienceTools(mockServer, client as JulesClient);
+
+        const run = () =>
+            registeredTools.get('jules_run_task')!.handler({
+                prompt: 'p',
+                source: 'sources/github/o/r',
+                starting_branch: 'main',
+                reason: 'r',
+                auto_approve: true,
+                poll_interval_ms: 5,
+                timeout_ms: 400,
+            });
+        return { run, getSession };
+    }
+
+    it.each(['CANCELLED', 'CANCELED', 'COMPLETED_UNKNOWN'])(
+        '%s is terminal — reported at once, never polled',
+        async (state) => {
+            const { run, getSession } = harness(state);
+            const result = await run();
+
+            expect(getSession).not.toHaveBeenCalled();
+            expect(result.isError).toBeFalsy();
+            expect(result.content[0].text).toContain(state);
+        },
+    );
+
+    it('a wholly invented state stops promptly and reports it verbatim', async () => {
+        const { run, getSession } = harness('A_STATE_INVENTED_IN_2027');
+        const result = await run();
+
+        expect(getSession).not.toHaveBeenCalled();
+        expect(result.content[0].text).toContain('A_STATE_INVENTED_IN_2027');
+    });
+
+    it('an unrecognised state is NOT reported as a timeout', async () => {
+        // The whole failure this ticket exists for: `timeout` must mean the
+        // deadline expired, never "we ran out of names".
+        const { run } = harness('WAITING_FOR_APPROVAL');
+        const result = await run();
+
+        expect(result.content[0].text).not.toContain('Timed out');
+        expect(result.content[0].text).not.toContain('408');
+    });
+
+    it('AWAITING_USER_INPUT (legacy) short-circuits like AWAITING_USER_FEEDBACK', async () => {
+        const { run, getSession } = harness('AWAITING_USER_INPUT');
+        const result = await run();
+
+        expect(getSession).not.toHaveBeenCalled();
+        expect(result.content[0].text).toContain('jules_send_message');
+    });
+
+    it.each(['PENDING', 'RUNNING'])(
+        '%s (legacy active) keeps polling to completion',
+        async (state) => {
+            const { run, getSession } = harness(state, ['COMPLETED']);
+            const result = await run();
+
+            expect(getSession).toHaveBeenCalled();
+            expect(result.content[0].text).toContain('COMPLETED');
+        },
+    );
+
+    it('reserves the timeout outcome for a genuine deadline expiry', async () => {
+        const { run, getSession } = harness('IN_PROGRESS', ['IN_PROGRESS']);
+        const result = await run();
+
+        expect(getSession).toHaveBeenCalled();
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain('Timed out');
+    });
+});

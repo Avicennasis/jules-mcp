@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeResourceName, TERMINAL_STATES } from '../src/types.js';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+    normalizeResourceName,
+    TERMINAL_STATES,
+    SESSION_STATES,
+    LEGACY_SESSION_STATES,
+    isActiveState,
+} from '../src/types.js';
 
 describe('normalizeResourceName', () => {
     it('prefixes a bare ID', () => {
@@ -35,5 +43,173 @@ describe('TERMINAL_STATES', () => {
 
     it('does not contain IN_PROGRESS', () => {
         expect(TERMINAL_STATES.has('IN_PROGRESS')).toBe(false);
+    });
+});
+
+// --- SessionState is an OPEN union (#50647, #50777) ---
+//
+// Four community repos gave four state vocabularies and no two agree. The union
+// of names claimed beyond ours is at least CANCELLED, CANCELED,
+// COMPLETED_UNKNOWN, PENDING, RUNNING, AWAITING_USER_INPUT, WAITING_FOR_APPROVAL
+// and UNKNOWN — several of them guesses (#50777). The enumeration cannot be
+// completed by collecting more names from third parties, so the fix is a safe
+// default branch, not a longer list.
+//
+// The union being OPEN is a compile-time property and tests are excluded from
+// tsconfig, so it cannot be asserted here. The proof lives in src/types.ts,
+// where `npm run build` checks it.
+
+describe('SESSION_STATES vocabulary', () => {
+    it('lists only the states the current API documents', () => {
+        expect([...SESSION_STATES]).toEqual([
+            'STATE_UNSPECIFIED',
+            'QUEUED',
+            'PLANNING',
+            'AWAITING_PLAN_APPROVAL',
+            'AWAITING_USER_FEEDBACK',
+            'IN_PROGRESS',
+            'PAUSED',
+            'FAILED',
+            'COMPLETED',
+        ]);
+    });
+
+    it('keeps legacy and in-the-wild names in a separate list', () => {
+        // Kept apart so the current vocabulary stays honest: these are names we
+        // must TOLERATE, not names the API is documented to send.
+        expect([...LEGACY_SESSION_STATES]).toContain('PENDING');
+        expect([...LEGACY_SESSION_STATES]).toContain('RUNNING');
+        expect([...LEGACY_SESSION_STATES]).toContain('AWAITING_USER_INPUT');
+        expect([...LEGACY_SESSION_STATES]).toContain('CANCELLED');
+        expect([...LEGACY_SESSION_STATES]).toContain('CANCELED');
+        expect([...LEGACY_SESSION_STATES]).toContain('COMPLETED_UNKNOWN');
+    });
+});
+
+describe('TERMINAL_STATES', () => {
+    it.each([
+        'COMPLETED',
+        'FAILED',
+        'CANCELLED',
+        'CANCELED',
+        'COMPLETED_UNKNOWN',
+    ])('%s is terminal', (state) => {
+        expect(TERMINAL_STATES.has(state)).toBe(true);
+    });
+
+    it('carries BOTH cancelled spellings', () => {
+        // A check matching one spelling silently misses the other. This is the
+        // assertion that fails if someone "tidies" the duplicate away.
+        expect(TERMINAL_STATES.has('CANCELLED')).toBe(true);
+        expect(TERMINAL_STATES.has('CANCELED')).toBe(true);
+    });
+
+    it.each([
+        'PAUSED',
+        'QUEUED',
+        'PLANNING',
+        'IN_PROGRESS',
+        'PENDING',
+        'RUNNING',
+    ])('%s is NOT terminal', (state) => {
+        expect(TERMINAL_STATES.has(state)).toBe(false);
+    });
+
+    it('does not contain PAUSED — a paused session is resumable, not finished', () => {
+        expect(TERMINAL_STATES.has('PAUSED')).toBe(false);
+    });
+});
+
+describe('isActiveState — the predicate the poll loop branches on', () => {
+    it.each([
+        'STATE_UNSPECIFIED',
+        'QUEUED',
+        'PLANNING',
+        'IN_PROGRESS',
+        'PENDING',
+        'RUNNING',
+    ])('%s means keep polling', (state) => {
+        expect(isActiveState(state)).toBe(true);
+    });
+
+    it.each([
+        'COMPLETED',
+        'FAILED',
+        'CANCELED',
+        'COMPLETED_UNKNOWN',
+        'PAUSED',
+        'AWAITING_PLAN_APPROVAL',
+        'AWAITING_USER_FEEDBACK',
+        'AWAITING_USER_INPUT',
+    ])('%s means stop', (state) => {
+        expect(isActiveState(state)).toBe(false);
+    });
+
+    // The whole point: an unrecognised state must NOT read as "keep polling".
+    // Anything else and a finished session polls to the 600s deadline and is
+    // then reported as a timeout, which is not what happened.
+    it.each([
+        'WAITING_FOR_APPROVAL',
+        'UNKNOWN',
+        'A_STATE_INVENTED_IN_2027',
+        '',
+    ])('an unrecognised state (%s) is NOT active', (state) => {
+        expect(isActiveState(state)).toBe(false);
+    });
+});
+
+// --- Every state literal in src/ must be a state we know (#50777) ---
+//
+// Opening the SessionState union bought a safe unknown-state branch and COST
+// the typo protection a closed union gave for free: `state === 'PAUSDE'` is no
+// longer a type error, it is just a comparison that is never true, and the
+// session it was meant to short-circuit silently polls to the deadline instead.
+//
+// #50777's third criterion — "any state literal in our source is derived from
+// SESSION_STATES, never hand-written at a use site" — exists for exactly that.
+// Rather than route every comparison through a constant, this asserts the
+// property structurally: whatever literal a use site compares `state` against,
+// it must be a name we recognise.
+
+describe('state literals used in src/', () => {
+    const SRC = join(import.meta.dirname, '..', 'src');
+
+    function tsFilesUnder(dir: string): string[] {
+        return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+            const full = join(dir, entry.name);
+            if (entry.isDirectory()) return tsFilesUnder(full);
+            return entry.isFile() && entry.name.endsWith('.ts') ? [full] : [];
+        });
+    }
+
+    /** Every `state === 'X'` / `state !== 'X'` literal across src/. */
+    function stateComparisonLiterals(): { file: string; literal: string }[] {
+        const found: { file: string; literal: string }[] = [];
+        for (const file of tsFilesUnder(SRC)) {
+            const src = readFileSync(file, 'utf8');
+            for (const m of src.matchAll(
+                /\bstate\s*[=!]==?\s*'([A-Z][A-Z0-9_]*)'/g,
+            )) {
+                found.push({ file, literal: m[1]! });
+            }
+        }
+        return found;
+    }
+
+    it('finds the comparisons at all — guard against a vacuous pass', () => {
+        // If the regex stops matching (a refactor to a switch, say), an empty
+        // set would make the assertion below pass while checking nothing.
+        expect(stateComparisonLiterals().length).toBeGreaterThanOrEqual(4);
+    });
+
+    it('compares only against known state names', () => {
+        const known = new Set<string>([
+            ...SESSION_STATES,
+            ...LEGACY_SESSION_STATES,
+        ]);
+        const unknown = stateComparisonLiterals().filter(
+            (c) => !known.has(c.literal),
+        );
+        expect(unknown).toEqual([]);
     });
 });

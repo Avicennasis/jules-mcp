@@ -9,6 +9,209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`JULES_ALLOWED_REPOS` is now enforced on every tool that creates or
+  schedules work** — `jules_create_session`, `jules_run_task`,
+  `jules_schedule_task`, and `jules_create_session_from_issue` — via a shared
+  `src/allowlist.ts`. Previously it guarded the issue tool only, which was the
+  slice #50457 needed.
+
+    A bound on which repository a session may target is the guardrail worth
+    having: there are hundreds of connected sources and a session writes a
+    branch and can open a PR. It is also the mechanical form of a repo-scope
+    rule that otherwise lives only in instructions.
+
+    Unset means no restriction, so nothing breaks on upgrade — and the server
+    now prints which state it is in at startup, because an absent guardrail is
+    invisible and reads exactly like a working one. Denials return a
+    `403`-shaped error naming the repo and the allowlist, and emit an audit
+    record. `dry_run` is a preview, not an exemption. It **fails closed** on a
+    source whose repo cannot be determined while a list is configured: in a
+    guardrail, "cannot confirm" must not read as "permit".
+
+    Redmine #50432.
+
+- **Request timeouts are now retried on idempotent methods** (`GET`, `HEAD`,
+  `OPTIONS`, `PUT`, `DELETE`) and still never on `POST`/`PATCH`.
+
+    This reverses the timeout clause of #50643 in favour of #50447, on the
+    operator's decision. The original argument was that the deadline is the
+    caller's, set via `requestTimeoutMs`, so replaying it spends one they did
+    not ask for. The better argument is that a timeout expiring client-side
+    says nothing about whether the server processed the request — it is an
+    _absence_ of a verdict, not a verdict — which is exactly the ambiguity a
+    `5xx` or a dropped socket presents, and those already get the right answer.
+
+    The `POST` half is unchanged: a timed-out create may already have landed and
+    Jules has no idempotency key. A `429` arriving alongside a timeout does
+    **not** unlock the any-method fast path, since with no response there is no
+    server verdict to act on.
+
+    Redmine #50447; `DESIGN.md` Decisions item 5 records the reversal.
+
+- **MCP prompts.** Seven reusable task templates (`src/prompts/`), served over
+  `prompts/list` and `prompts/get` and surfaced by clients as slash commands:
+  `add-tests-for-module`, `fix-failing-ci`, `upgrade-dependency`,
+  `refactor-for-readability`, `write-missing-docs`, `triage-stale-sessions`,
+  `review-session-diff`.
+
+    Each template's advertised arguments are **derived by scanning its own body**
+    for placeholder tokens, rather than declared beside it. Adding `<TIMEOUT>` to
+    a body _is_ adding a `TIMEOUT` argument, so the template and its schema
+    cannot drift apart — the same class of defect as the README count drift in
+    #50462/#50463, fixed the same way. Two token forms: `<NAME>` for an
+    operator-supplied identifier, `[[NAME]]` for externally-sourced text, which
+    is nonce-fenced through `src/untrusted.ts`. The fencing decision therefore
+    also follows from the body, with no side list to forget.
+
+    Every argument is optional, so `prompts/get` with no arguments renders the
+    template with its placeholders visible — a preview, through the same
+    substitution path a filled render uses.
+
+    Served through two low-level handlers rather than `McpServer.registerPrompt`.
+    That call exists in the pinned SDK (1.30.0) but parses `params.arguments`
+    against a Zod object, and a Zod object rejects `undefined` however optional
+    its fields are — so `prompts/get` with `arguments` omitted failed with
+    `Invalid input: expected object, received undefined` for every prompt that
+    advertises arguments, which is exactly the preview case. `arguments` is
+    optional in the protocol, so a client is entitled to omit it. Measured
+    against a real `Client` over `InMemoryTransport`.
+
+    Templates carry no standing guidance of their own: `jules_create_session`
+    prepends `guidance.md` at creation time, so embedding it would ship it twice.
+    Scope is written as positive enclosure ("ONLY add or extend tests covering
+    …") rather than as a list of prohibitions, and a test enforces it.
+
+    Idea from `melbinjp/jules-prompts` (MIT); implementation is our own.
+    Redmine #50429.
+
+- `jules_create_session_from_issue` — turn a GitHub issue into a Jules task
+  (Redmine #50457). Fetches the issue title, body, labels and the **whole**
+  comment thread (paged explicitly, so a 200-comment issue is not silently read
+  as its first 30), fences every one of them with `src/untrusted.ts`, and
+  composes a session prompt. `dry_run` returns the composed prompt without
+  creating anything.
+
+    The input is attacker-writable — on a public repo anyone can open an issue
+    or comment on one — and Jules holds repo write access, so the defaults fail
+    closed. `AUTO_CREATE_PR` is **off** unless the caller passes
+    `allow_auto_create_pr: true`, leaving the default run stopping at a
+    reviewable patch; `require_plan_approval` stays on; and the new
+    `JULES_ALLOWED_REPOS` allowlist is checked before GitHub is contacted at
+    all, `dry_run` included. This resolves the question left open on #50644 in
+    the conservative direction — flagged here so it can be overruled
+    deliberately rather than by accident.
+
+    The session title defaults to `Issue owner/repo#N`, not the issue's own
+    title: the number is the traceability, the title is attacker-written text.
+
+- `src/github.ts` — a read-only GitHub reader built on the platform `fetch`. No
+  Octokit and no dependency on `gh` being installed or authenticated, so the
+  server behaves the same wherever its client runs. The token comes from
+  `GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_PERSONAL_ACCESS_TOKEN` and never
+  reaches argv, a log line or a prompt. `owner/repo` is validated against
+  GitHub's own name alphabet before it is interpolated into a URL path — the
+  #50421 lesson applied to a second API. A 404 error explains that GitHub
+  answers 404 for repos you cannot see, so a private repo and a missing issue
+  are indistinguishable.
+
+- **Opt-in streamable-HTTP transport.** `--transport http` (or
+  `JULES_MCP_TRANSPORT=http`) serves one MCP endpoint at
+  `http://127.0.0.1:9673/mcp`: `POST` returns `application/json`, notifications
+  return 202 with no body, `DELETE` tears a session down, and `GET` returns
+  **405** — the MCP spec's stated alternative to offering the optional SSE
+  stream. The official SDK client treats that 405 as a clean no-op and
+  continues POST-only, which `tests/http/no-sse.test.ts` proves by driving a
+  real `StreamableHTTPClientTransport` against the real handler.
+
+    stdio remains the default and is unchanged; `npm start` behaves exactly as
+    before. Tool registration moved to `src/server-factory.ts` so both
+    transports build from one registry — the HTTP transport creates one MCP
+    server per session, sharing the Jules client, scheduler and source-config
+    store.
+
+    **Security posture, stated plainly** (Redmine #50638, with the anti-patterns
+    from #50652 and #50775): authentication is unconditional and precedes
+    dispatch, `JULES_MCP_HTTP_TOKEN` is required and there is no
+    unauthenticated mode; no security decision reads a peer address, because a
+    `socat` relay re-originates connections and makes `127.0.0.1` meaningless
+    as evidence (#50662); a proxy-supplied `X-Forwarded-User` is honoured only
+    alongside a constant-time-compared `X-Forwarded-Auth-Secret`, and with no
+    secret configured that path is disabled rather than trusted; `Origin` is
+    exact-match validated and a wildcard is refused at startup; an unknown
+    `Mcp-Session-Id` is 404, never a silent new session; request bodies are
+    capped. What is _not_ bounded: any token holder can call every tool. See
+    the README's "Security note — read this before exposing it".
+
+- `SessionState` is now an **open union**, and `jules_run_task` stops on states
+  it does not recognise instead of polling them to the deadline.
+
+    The poll loop used to continue on anything outside `TERMINAL_STATES`, which
+    was exactly `{COMPLETED, FAILED}`. A session in `CANCELED` or
+    `COMPLETED_UNKNOWN` is finished, matches none of the named short-circuits,
+    and so polled for the full 600s and was then reported as a `timeout` — the
+    caller waits ten minutes and is told the wrong thing. The loop now branches
+    on "is this a state I recognise as still working?", so the unknown case is
+    safe by construction.
+
+    `TERMINAL_STATES` gains `CANCELLED`, `CANCELED` (both spellings appear in
+    the field; matching one silently misses the other) and `COMPLETED_UNKNOWN`.
+    `LEGACY_SESSION_STATES` records `PENDING`, `RUNNING` and
+    `AWAITING_USER_INPUT`, kept apart from `SESSION_STATES` so that list stays
+    an honest statement of the documented vocabulary. `AWAITING_USER_INPUT` is
+    handled as the legacy alias of `AWAITING_USER_FEEDBACK`, and all six legacy
+    names have `describeState` entries marked as such.
+
+    Four surveyed clients gave four disagreeing state vocabularies with several
+    invented names, so the enumeration cannot be completed by collecting more of
+    them. `timeout` is now reserved for a genuine deadline expiry.
+
+    Redmine #50647, with evidence from #50777 and #50452.
+
+- Idempotency-aware automatic retry (`src/retry.ts`, wired into `JulesClient`).
+  Two retries by default, exponential backoff with jitter, `Retry-After`
+  honored.
+
+    **A `429` is retried for every method including `POST`; a `5xx` or network
+    failure only for idempotent ones.** A 429 means the request was rejected
+    without being processed, so replaying it is safe. A 5xx or a dropped socket
+    is ambiguous — the session may already exist — and Jules has no idempotency
+    key, so replaying a `POST /sessions` can double-create and burn quota with
+    no measured daily ceiling (#50428).
+
+    Timeouts are never retried: that is our own deadline, not the server's
+    advice. A `Retry-After` longer than `retryMaxDelayMs` (30s default) is
+    surfaced as an error rather than slept through, since blocking an MCP tool
+    call for an hour is worse than failing; the exponential term is clamped to
+    that ceiling instead.
+
+    Adapted from `Yuuqq/jules-dispatch` (MIT), the sharpest of the 26 community
+    implementations surveyed. Tunable per client via `retries`,
+    `retryBaseDelayMs`, `retryJitterMs`, `retryMaxDelayMs`; `retries: 0`
+    disables it.
+
+    Redmine #50643, consolidating #50416, #50447, #50451 and #50461.
+
+- Nonce-fenced envelopes for untrusted text entering a prompt (`src/untrusted.ts`:
+  `makeNonce`, `fence`, `buildFencedPrompt`). Externally-sourced values — a
+  GitHub issue body, a PR description, a comment thread — are wrapped in
+  symmetric `<<<BEGIN <LABEL> <NONCE>>>>` / `<<<END <LABEL> <NONCE>>>>` markers
+  carrying 96 bits of CSPRNG output minted at prompt-build time, with framing
+  that tells the model the fenced regions are inert data.
+
+    The defence is timing, not escaping: the nonce is minted after the untrusted
+    author wrote their content, so no payload can carry a marker that closes the
+    fence. Content is therefore passed through **byte-identical** — no NFKC
+    normalization, no phrase neutralization — which is what keeps a diff, a code
+    block or a security advisory quoting "ignore previous instructions" intact.
+    Adapted from `maxi-tools/maxi-reviewer` (MIT).
+
+    Fencing closes the first hop only. Jules fetches URLs found in a prompt
+    (measured 2026-08-31), so a link inside a fenced block still reaches it
+    through a channel the fence does not touch; see README's "Fencing untrusted
+    text in prompts" for what to pair it with.
+
+    Redmine #50644.
+
 - Pinned base commit surfaced in change summaries. `ChangeSummary` now carries
   `baseCommitId`, and `changeSummaryLine` renders it as `base <sha7>`, so
   `jules_list_sessions(detect_changes: true)` shows the commit each session

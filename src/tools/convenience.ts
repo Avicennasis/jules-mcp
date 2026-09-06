@@ -7,8 +7,10 @@ import {
     TERMINAL_STATES,
     normalizeResourceName,
     type Session,
+    isActiveState,
 } from '../types.js';
 import { JulesAPIError } from '../errors.js';
+import { checkSourceAllowed } from '../allowlist.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -47,6 +49,7 @@ type PollOutcome =
     | { outcome: 'awaiting_plan_approval'; session: Session }
     | { outcome: 'awaiting_user_feedback'; session: Session }
     | { outcome: 'paused'; session: Session }
+    | { outcome: 'unknown_state'; session: Session }
     | { outcome: 'timeout'; session: Session }
     | { outcome: 'error'; session: Session; error: string };
 
@@ -64,9 +67,31 @@ async function pollToCompletion(
     session: Session,
     opts: PollOptions,
 ): Promise<LivePollOutcome> {
+    // Structured as "poll only while the state is one we RECOGNISE as still
+    // working", not "poll until terminal". The old form continued on anything
+    // outside TERMINAL_STATES, so a session in CANCELED or COMPLETED_UNKNOWN --
+    // finished, under a name we had not listed -- polled to the 600s deadline
+    // and was then reported as a `timeout`. Four surveyed repos gave four
+    // disagreeing state vocabularies, several of them guesses, so the
+    // enumeration cannot be completed by collecting names; the default branch
+    // has to be the safe one instead (#50647, #50777).
     let current = session;
-    while (!TERMINAL_STATES.has(current.state) && Date.now() < opts.deadline) {
-        if (current.state === 'AWAITING_PLAN_APPROVAL' && opts.autoApprove) {
+    for (;;) {
+        const state = current.state;
+
+        if (TERMINAL_STATES.has(state)) {
+            return { outcome: 'terminal', session: current };
+        }
+
+        // The one state we act on rather than report, so it is handled first --
+        // it is the only branch that falls through to another iteration.
+        if (state === 'AWAITING_PLAN_APPROVAL') {
+            if (!opts.autoApprove) {
+                return { outcome: 'awaiting_plan_approval', session: current };
+            }
+            if (Date.now() >= opts.deadline) {
+                return { outcome: 'timeout', session: current };
+            }
             current = await client.approvePlan(current.id);
             await emitAudit({
                 source: 'jules-mcp',
@@ -81,30 +106,36 @@ async function pollToCompletion(
             continue;
         }
 
-        if (current.state === 'AWAITING_PLAN_APPROVAL' && !opts.autoApprove) {
-            return { outcome: 'awaiting_plan_approval', session: current };
-        }
-
-        if (current.state === 'AWAITING_USER_FEEDBACK') {
+        // AWAITING_USER_INPUT is the legacy name for AWAITING_USER_FEEDBACK.
+        if (
+            state === 'AWAITING_USER_FEEDBACK' ||
+            state === 'AWAITING_USER_INPUT'
+        ) {
             return { outcome: 'awaiting_user_feedback', session: current };
         }
 
         // A paused session cannot progress on its own, so polling it is
-        // pure waste — without this it burned the whole deadline (10 min by
+        // pure waste -- without this it burned the whole deadline (10 min by
         // default) and then reported `timeout`, which is not what happened.
         // PAUSED deliberately stays OUT of TERMINAL_STATES: that set means
         // "finished", and a paused session can be resumed (#50).
-        if (current.state === 'PAUSED') {
+        if (state === 'PAUSED') {
             return { outcome: 'paused', session: current };
+        }
+
+        // Not terminal, not actionable, and not a state we know keeps moving.
+        // Stop and say so rather than polling something that may never change.
+        if (!isActiveState(state)) {
+            return { outcome: 'unknown_state', session: current };
+        }
+
+        if (Date.now() >= opts.deadline) {
+            return { outcome: 'timeout', session: current };
         }
 
         await sleep(opts.pollIntervalMs);
         current = await client.getSession(current.id);
     }
-
-    return TERMINAL_STATES.has(current.state)
-        ? { outcome: 'terminal', session: current }
-        : { outcome: 'timeout', session: current };
 }
 
 /** One-line human note for a parallel-mode per-session outcome. */
@@ -118,6 +149,8 @@ function outcomeNote(o: PollOutcome): string {
             return 'Needs user feedback — respond with jules_send_message.';
         case 'paused':
             return 'Session is paused — resume it in the Jules web app, or archive it with jules_archive_session.';
+        case 'unknown_state':
+            return `Stopped at state ${o.session.state}, which this server does not recognise — check the session in the Jules web app. Reported verbatim rather than polled, so this is not a timeout.`;
         case 'timeout':
             return `Timed out while still ${o.session.state} — poll with jules_get_session.`;
         case 'error':
@@ -184,6 +217,24 @@ export function registerConvenienceTools(
             parallel,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
+
+            // #50432: bound WHICH REPO this may touch, before anything is
+            // created. dry_run is a preview, not an exemption -- a denied repo
+            // is refused in both modes so the preview cannot become the
+            // rehearsal for a request that would be refused anyway.
+            const allowlist = process.env.JULES_ALLOWED_REPOS;
+            const gate = checkSourceAllowed(normalizedSource, allowlist);
+            if (!gate.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: normalizedSource,
+                    reason,
+                    payload: { denied_by: 'allowlist', repo: gate.repo },
+                });
+                return errorResponse(new JulesAPIError(gate.message, 403));
+            }
 
             // --- Parallel mode: fan out N sessions, poll all concurrently ---
             if (parallel > 1) {
@@ -359,6 +410,20 @@ export function registerConvenienceTools(
                             {
                                 type: 'text' as const,
                                 text: `Session is paused and will not progress on its own. Resume it in the Jules web app, or archive it with jules_archive_session.\n\n${formatSession(outcome.session)}`,
+                            },
+                        ],
+                    };
+                }
+
+                if (outcome.outcome === 'unknown_state') {
+                    // Deliberately NOT isError: nothing failed. The session
+                    // reached a state this server does not have a rule for,
+                    // which is expected against a v1alpha API we chase.
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `Session reached state ${outcome.session.state}, which this server does not recognise, so polling stopped rather than running to the timeout. Check it in the Jules web app.\n\n${formatSession(outcome.session)}`,
                             },
                         ],
                     };
