@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP progress notifications + client cancellation for `jules_run_task` (#50418).** The client opts in by putting a `progressToken` in the request `_meta`; each poll then emits `notifications/progress` carrying elapsed-vs-`timeout_ms` and the current session state. Without a token, **nothing** is emitted — absence degrades silently rather than crashing or spamming, and a `sendNotification` that rejects cannot fail the run it reports on. Parallel mode reports one aggregate stream (`settled/sessions`) instead of N interleaved ones. `extra.signal` abort stops polling promptly and returns a `cancelled` outcome, reported distinctly from `timeout` so a cancelled request is never mistaken for a stalled session. `DESIGN.md` decision 2, which claimed this existed and was corrected to NOT BUILT under #50463, is now true.
 - **`jules_schedule_task` now refuses a cron expression that fires more often
   than a configurable minimum (default hourly).** A schedule was checked only
   for _syntactic_ validity, so `* * * * *` was accepted and would have fired
