@@ -18,7 +18,7 @@ You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 632 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 637 unit tests, smoke test against the live API.
 
 ---
 
@@ -68,7 +68,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 632 unit tests
+npm test           # 637 unit tests
 ```
 
 ## Configuration
@@ -595,7 +595,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (632 tests)
+npm test             # vitest run (637 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)

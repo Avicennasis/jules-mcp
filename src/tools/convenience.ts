@@ -42,6 +42,14 @@ interface PollOptions {
     deadline: number;
     normalizedSource: string;
     reason: string;
+    /** Client cancellation (#50418). Polling stops promptly when aborted. */
+    signal?: AbortSignal;
+    /** Called once per poll iteration with where the session is (#50418). */
+    onProgress?: (p: {
+        state: string;
+        elapsedMs: number;
+        totalMs: number;
+    }) => void;
 }
 
 type PollOutcome =
@@ -51,6 +59,7 @@ type PollOutcome =
     | { outcome: 'paused'; session: Session }
     | { outcome: 'unknown_state'; session: Session }
     | { outcome: 'timeout'; session: Session }
+    | { outcome: 'cancelled'; session: Session }
     | { outcome: 'error'; session: Session; error: string };
 
 /** What pollToCompletion itself can return — the 'error' variant is only
@@ -76,7 +85,21 @@ async function pollToCompletion(
     // enumeration cannot be completed by collecting names; the default branch
     // has to be the safe one instead (#50647, #50777).
     let current = session;
+    const startedAt = Date.now();
+    const totalMs = Math.max(0, opts.deadline - startedAt);
     for (;;) {
+        // #50418: honour client cancellation before doing anything else, so an
+        // aborted request stops promptly instead of polling out its deadline.
+        if (opts.signal?.aborted) {
+            return { outcome: 'cancelled', session: current };
+        }
+        // Report where we are on every iteration. Absence of a listener is the
+        // silent-degradation path -- nothing is emitted and nothing breaks.
+        opts.onProgress?.({
+            state: current.state,
+            elapsedMs: Date.now() - startedAt,
+            totalMs,
+        });
         const state = current.state;
 
         if (TERMINAL_STATES.has(state)) {
@@ -153,6 +176,8 @@ function outcomeNote(o: PollOutcome): string {
             return `Stopped at state ${o.session.state}, which this server does not recognise — check the session in the Jules web app. Reported verbatim rather than polled, so this is not a timeout.`;
         case 'timeout':
             return `Timed out while still ${o.session.state} — poll with jules_get_session.`;
+        case 'cancelled':
+            return `Cancelled by the client while ${o.session.state}. The session keeps running on Jules — poll it with jules_get_session.`;
         case 'error':
             return `Polling failed: ${o.error} — poll with jules_get_session.`;
     }
@@ -204,19 +229,55 @@ export function registerConvenienceTools(
                     "Number of parallel sessions to create with the same prompt (1-10, default 1). Each runs independently. Inspired by the Jules CLI's --parallel flag.",
                 ),
         },
-        async ({
-            prompt,
-            source,
-            starting_branch,
-            title,
-            automation_mode,
-            reason,
-            auto_approve,
-            poll_interval_ms,
-            timeout_ms,
-            parallel,
-        }) => {
+        async (
+            {
+                prompt,
+                source,
+                starting_branch,
+                title,
+                automation_mode,
+                reason,
+                auto_approve,
+                poll_interval_ms,
+                timeout_ms,
+                parallel,
+            },
+            extra,
+        ) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
+
+            // #50418: MCP progress + cancellation. The client opts in by putting
+            // a progressToken in the request's `_meta`; without one we emit
+            // NOTHING at all -- absence must degrade silently, not crash or
+            // spam. `extra` is also absent when a test drives the handler
+            // directly, so every read here is optional-chained.
+            const progressToken = (
+                extra as { _meta?: { progressToken?: unknown } }
+            )?._meta?.progressToken;
+            const sendNotification = (
+                extra as { sendNotification?: (n: unknown) => unknown }
+            )?.sendNotification;
+            const emitProgress = (
+                progress: number,
+                total: number,
+                message: string,
+            ): void => {
+                if (progressToken === undefined || progressToken === null) {
+                    return;
+                }
+                if (typeof sendNotification !== 'function') {
+                    return;
+                }
+                // Fire-and-forget: a progress notification must never be able to
+                // fail the work it is reporting on.
+                void Promise.resolve(
+                    sendNotification.call(extra, {
+                        method: 'notifications/progress',
+                        params: { progressToken, progress, total, message },
+                    }),
+                ).catch(() => {});
+            };
+            const signal = (extra as { signal?: AbortSignal })?.signal;
 
             // #50432: bound WHICH REPO this may touch, before anything is
             // created. dry_run is a preview, not an exemption -- a denied repo
@@ -283,6 +344,10 @@ export function registerConvenienceTools(
                     // tool description). A failure polling one session does
                     // not abort the others.
                     const deadline = Date.now() + timeout_ms;
+                    // #50418: aggregate progress for parallel mode — one
+                    // settled poll = one unit, so N concurrent sessions cannot
+                    // interleave N independent progress streams into garbage.
+                    let settled = 0;
                     const outcomes = await Promise.all(
                         sessions.map((s) =>
                             pollToCompletion(client, s, {
@@ -291,11 +356,30 @@ export function registerConvenienceTools(
                                 deadline,
                                 normalizedSource,
                                 reason,
-                            }).catch((error): PollOutcome => ({
-                                outcome: 'error',
-                                session: s,
-                                error: String(error),
-                            })),
+                                signal,
+                            })
+                                .then((o) => {
+                                    settled++;
+                                    emitProgress(
+                                        settled,
+                                        sessions.length,
+                                        `${settled}/${sessions.length} sessions finished polling`,
+                                    );
+                                    return o;
+                                })
+                                .catch((error): PollOutcome => {
+                                    settled++;
+                                    emitProgress(
+                                        settled,
+                                        sessions.length,
+                                        `${settled}/${sessions.length} sessions finished polling`,
+                                    );
+                                    return {
+                                        outcome: 'error',
+                                        session: s,
+                                        error: String(error),
+                                    };
+                                }),
                         ),
                     );
 
@@ -372,13 +456,34 @@ export function registerConvenienceTools(
                 });
 
                 // 2. Poll until terminal or needs action (shared helper)
+                const pollDeadline = Date.now() + timeout_ms;
                 const outcome = await pollToCompletion(client, session, {
                     autoApprove: auto_approve,
                     pollIntervalMs: poll_interval_ms,
-                    deadline: Date.now() + timeout_ms,
+                    deadline: pollDeadline,
                     normalizedSource,
                     reason,
+                    // #50418: one progress stream for one session — progress is
+                    // elapsed-vs-budget and the state we are currently seeing.
+                    signal,
+                    onProgress: (p) =>
+                        emitProgress(
+                            p.elapsedMs,
+                            p.totalMs,
+                            `${p.state} (${Math.round(p.elapsedMs / 1000)}s of ${Math.round(p.totalMs / 1000)}s)`,
+                        ),
                 });
+
+                if (outcome.outcome === 'cancelled') {
+                    return {
+                        content: [
+                            {
+                                type: 'text' as const,
+                                text: `Polling was cancelled by the client while the session was ${outcome.session.state}. The session keeps running on Jules — poll it with jules_get_session.\n\n${formatSession(outcome.session)}`,
+                            },
+                        ],
+                    };
+                }
 
                 if (outcome.outcome === 'awaiting_plan_approval') {
                     // User wants manual plan review — return so they can approve

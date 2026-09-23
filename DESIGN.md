@@ -92,9 +92,9 @@ Key states:
 
 ### Convenience (1 tool)
 
-| Tool             | Jules API | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `jules_run_task` | composite | Create a session, poll until plan is ready, auto-approve, poll until completion, return results. One-shot "fire and forget" for when you trust Jules to just do the thing. Params: same as `create_session` plus `auto_approve` (default true), `poll_interval_ms` (default 5000), `timeout_ms` (default 600000 / 10 min), `parallel` (1–10, fans out N independent sessions). **Does not** report MCP progress notifications — see decision 2 and Redmine #50418. |
+| Tool             | Jules API | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` | composite | Create a session, poll until plan is ready, auto-approve, poll until completion, return results. One-shot "fire and forget" for when you trust Jules to just do the thing. Params: same as `create_session` plus `auto_approve` (default true), `poll_interval_ms` (default 5000), `timeout_ms` (default 600000 / 10 min), `parallel` (1–10, fans out N independent sessions). Reports MCP progress notifications when the client supplies a `progressToken`, and honors `extra.signal` cancellation — see decision 2. |
 
 ### Diff & review (2 tools)
 
@@ -298,10 +298,12 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
 
 > **Audited against the source 2026-09-05 (#50463).** Decision 2's claim about MCP
 > progress notifications was found false in 2026-08 — under a heading a future
-> implementer trusts more than an open TODO, which is what made it expensive. Every
-> other decision now carries the evidence it was checked against and the date, so the
-> next reader can tell a verified statement from an inherited one. Decision 5 was added
-> the same day and records a live conflict between two tickets rather than hiding it.
+> implementer trusts more than an open TODO, which is what made it expensive.
+> **Resolved 2026-09-23: the claim is now true (#50418)** — see decision 2 below for
+> what was built and how it degrades. Every other decision now carries the evidence it
+> was checked against and the date, so the next reader can tell a verified statement
+> from an inherited one. Decision 5 was added the same day and records a live conflict
+> between two tickets rather than hiding it.
 
 1. **`require_plan_approval` defaults to `true`** — safer; Claude sees the plan before
    Jules executes. Users can override per-session. Verified 2026-09-05: `.default(true)`
@@ -323,15 +325,18 @@ of the 2026-08-23 code-depth pass. Re-examine before treating its rows above as 
 
 2. **`jules_run_task` convenience tool included** — composite create+poll+approve for
    fire-and-forget usage, with `parallel` (1–10) fanning out N independent sessions.
-   **NOT BUILT: MCP progress notifications.** This line used to assert we report
-   progress via `notifications/progress`. We do not, and never did — there is no
-   `progressToken`, `sendNotification` or `_meta` handling in
-   `src/tools/convenience.ts`. `jules_run_task` polls blind for up to 600s with no
-   client feedback and no cancellation path. The intent stands and is tracked in
-   **Redmine #50418**; corrected under **#50463**. The same false claim also sat in
-   the Convenience tool table above and is corrected there too — when retiring a
-   claim, grep the whole document for it rather than fixing the instance you found.
-   Do not re-state this as done until #50418 closes.
+   **BUILT 2026-09-23 (#50418): MCP progress notifications + cancellation.** This line
+   used to assert we reported progress via `notifications/progress` while nothing in
+   `src/tools/convenience.ts` touched `progressToken`, `sendNotification` or `_meta` —
+   the claim was corrected to NOT BUILT under **#50463** and is now true. When the
+   client supplies a `progressToken` in the request `_meta`, each poll emits
+   `notifications/progress` carrying elapsed-vs-`timeout_ms` plus the current session
+   state; without one, nothing is emitted at all (silent degradation, no spam).
+   Parallel mode reports one aggregate stream (`settled/sessions`) rather than N
+   interleaved ones. `extra.signal` abort stops polling promptly and returns a
+   `cancelled` outcome — reported distinctly from `timeout`, so a cancelled request is
+   never mistaken for a session that stalled. The session keeps running on Jules
+   regardless; poll it with `jules_get_session`.
 3. **v1alpha breakage** — #YOLO. Pin to v1alpha, move fast. If it breaks, we fix it.
    No version-negotiation complexity. Verified 2026-09-05: one `BASE_URL` in
    `src/jules-client.ts:18`, and no other API version string appears anywhere in `src/`.
