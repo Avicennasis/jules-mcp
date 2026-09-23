@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`jules_schedule_task` now refuses a cron expression that fires more often
+  than a configurable minimum (default hourly).** A schedule was checked only
+  for _syntactic_ validity, so `* * * * *` was accepted and would have fired
+  1,440 Jules sessions a day, unattended — the scheduler is in-process and
+  nothing is watching. The gate computes the minimum interval between fires by
+  scanning a bounded window at the expression's own granularity (#50433):
+    - 5-field and 6-field expressions are both handled, and the **seconds**
+      field is accounted for, so an hourly-looking `* * * * * *` (which fires
+      every second) is refused rather than read as hourly.
+    - The refusal is a structured error naming the computed interval and the
+      minimum; `dry_run` reports `computed_interval_seconds` for any expression.
+    - Validation is **pure** — it creates no live job to test an expression.
+    - Configurable via `JULES_SCHEDULE_MIN_INTERVAL_SECONDS` (`0` disables).
+
 ## [0.8.0] - 2026-09-06
 
 ### Added

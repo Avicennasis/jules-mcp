@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { registerSchedulingTools } from '../../src/tools/scheduling.js';
 import type { ScheduleManager } from '../../src/scheduler/cron.js';
 
@@ -86,5 +86,72 @@ describe('scheduling tools', () => {
             reason: 'no longer needed',
         });
         expect(mockManager.remove).toHaveBeenCalledWith('sched-1');
+    });
+
+    // #50433 -- the handler must refuse a sub-hourly cron and report the
+    // computed interval, not merely validate that the expression parses.
+    describe('cron interval gate (#50433)', () => {
+        const ORIG = process.env.JULES_SCHEDULE_MIN_INTERVAL_SECONDS;
+        afterEach(() => {
+            if (ORIG === undefined)
+                delete process.env.JULES_SCHEDULE_MIN_INTERVAL_SECONDS;
+            else process.env.JULES_SCHEDULE_MIN_INTERVAL_SECONDS = ORIG;
+        });
+
+        it('refuses a 6-field per-second schedule via the dry_run path', async () => {
+            delete process.env.JULES_SCHEDULE_MIN_INTERVAL_SECONDS;
+            const handler = registeredTools.get('jules_schedule_task')!.handler;
+            const result = await handler({
+                cron: '*/1 * * * * *',
+                prompt: 'lint',
+                source: 'sources/github/o/r',
+                starting_branch: 'main',
+                label: 'Per second',
+                reason: 'automation',
+                dry_run: true,
+            });
+            const parsed = JSON.parse(result.content[0].text);
+            expect(parsed.status).toBe('ERROR');
+            expect(parsed.code).toBe(400);
+            expect(parsed.computed_interval_seconds).toBe(1);
+            expect(parsed.minimum_interval_seconds).toBe(3600);
+            expect(result.isError).toBe(true);
+            expect(mockManager.add).not.toHaveBeenCalled();
+        });
+
+        it('refuses a minutely schedule on the create path', async () => {
+            delete process.env.JULES_SCHEDULE_MIN_INTERVAL_SECONDS;
+            const handler = registeredTools.get('jules_schedule_task')!.handler;
+            const result = await handler({
+                cron: '* * * * *',
+                prompt: 'lint',
+                source: 'sources/github/o/r',
+                starting_branch: 'main',
+                label: 'Every minute',
+                reason: 'automation',
+            });
+            const parsed = JSON.parse(result.content[0].text);
+            expect(parsed.status).toBe('ERROR');
+            expect(parsed.computed_interval_seconds).toBe(60);
+            expect(mockManager.add).not.toHaveBeenCalled();
+        });
+
+        it('dry_run reports the computed interval for an accepted schedule', async () => {
+            delete process.env.JULES_SCHEDULE_MIN_INTERVAL_SECONDS;
+            const handler = registeredTools.get('jules_schedule_task')!.handler;
+            const result = await handler({
+                cron: '0 * * * *',
+                prompt: 'lint',
+                source: 'sources/github/o/r',
+                starting_branch: 'main',
+                label: 'Hourly',
+                reason: 'automation',
+                dry_run: true,
+            });
+            const parsed = JSON.parse(result.content[0].text);
+            expect(parsed.status).toBe('DRY_RUN');
+            expect(parsed.computed_interval_seconds).toBe(3600);
+            expect(parsed.minimum_interval_seconds).toBe(3600);
+        });
     });
 });

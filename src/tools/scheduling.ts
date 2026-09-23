@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import cron from 'node-cron';
+import { checkCronInterval } from '../scheduler/cron-interval.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ScheduleManager } from '../scheduler/cron.js';
 import { emitAudit } from '../audit.js';
@@ -112,6 +113,35 @@ export function registerSchedulingTools(
                 );
             }
 
+            // A parseable expression is not a sane one: `* * * * *` fires 1,440
+            // sessions a day, unattended. Reject anything below the configured
+            // minimum interval, and report the computed interval so the caller
+            // can see why (#50433).
+            const interval = checkCronInterval(input.cron);
+            if (!interval.ok) {
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify(
+                                {
+                                    status: 'ERROR',
+                                    code: 400,
+                                    message: interval.message,
+                                    computed_interval_seconds:
+                                        interval.intervalSeconds,
+                                    minimum_interval_seconds:
+                                        interval.minimumSeconds,
+                                },
+                                null,
+                                2,
+                            ),
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+
             if (dry_run) {
                 return {
                     content: [
@@ -121,6 +151,10 @@ export function registerSchedulingTools(
                                 {
                                     status: 'DRY_RUN',
                                     dry_run: true,
+                                    computed_interval_seconds:
+                                        interval.intervalSeconds,
+                                    minimum_interval_seconds:
+                                        interval.minimumSeconds,
                                     would_create: input,
                                 },
                                 null,
