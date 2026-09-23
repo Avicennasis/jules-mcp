@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The schedule store can no longer lose every schedule to a partial write or
+  an unreadable file.** `ScheduleStore` had three gaps (#50437, from a survey
+  of `savethepolarbears/jules-mcp-server`):
+    - **Atomic writes.** It wrote `schedules.enc` in place, so a write that died
+      partway truncated the only copy of every schedule. It now stages to a temp
+      file, `fsync`s it, then `rename(2)`s over the target (and `fsync`s the
+      directory), so an interrupted write leaves the previous file intact.
+    - **Corrupted-file backup.** A decrypt or parse failure used to be swallowed
+      by starting empty. An unreadable file is now copied to
+      `schedules.enc.corrupt-<timestamp>` before anything can overwrite it, and
+      the reason is surfaced on `ScheduleStore.lastLoadError`.
+    - **Per-file salt.** The key was derived from the fixed string
+      `'jules-mcp-salt'`, identical across every install. A random per-file salt
+      is now stored in a versioned (`v2`) envelope. Existing `v1` files still
+      decrypt and are upgraded on the next write.
+
 ## [0.8.0] - 2026-09-06
 
 ### Added
