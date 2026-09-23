@@ -433,7 +433,7 @@ ahead of it.
 ## Future Considerations
 
 - **Remote HTTP deployment** for broader distribution (Cloudflare Workers or similar) — the transport exists (#50638) but is deliberately localhost-and-token only; remote exposure needs per-tool authorization and rate limiting first
-- **Bulk operations**: create multiple sessions from a list of tasks
+- **Bulk operations**: create multiple sessions from a list of tasks — **shipped** as `jules_run_tasks` (#50655). Note it is distinct from `jules_run_task`'s `parallel`, which repeats one prompt; this takes N different prompts.
 - **Source auto-discovery**: if only one source exists, auto-select it in `create_session`
 - **MCP app widgets**: rich session status dashboard, plan review UI
 - **npm publish**: `@simmons-systems/jules-mcp` or similar

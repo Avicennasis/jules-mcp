@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`jules_run_tasks` — one session per entry in a task LIST (#50655).** `jules_run_task`'s `parallel` repeats **one** prompt N times; this takes N **different** prompts. Entries are `{prompt, title?, source?, starting_branch?, automation_mode?}`, with `source`/`starting_branch`/`automation_mode` defaulting from shared args and overridable per entry. Creation is bounded by `concurrency` (default 10, the same politeness cap `parallel` uses — #50428 found no measured daily ceiling on the API), every session is polled to completion, per-entry creation failures and per-session poll failures are isolated and reported, and each created session emits its own audit record. `dry_run` renders every would-be request and creates nothing.
+
+### Fixed
+
+- **README/DESIGN overclaim corrected.** The roadmap said bulk task-list creation was "done via `parallel` param on `jules_run_task`", and DESIGN.md listed it as still open — two documents contradicting each other, neither matching the code. Both now describe the shipped tool and the `parallel`-vs-task-list distinction explicitly.
+
 ## [0.8.0] - 2026-09-06
 
 ### Added

@@ -13,12 +13,12 @@ Built on the **official** Jules REST API (`v1alpha`) with CLI-inspired features 
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **20 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
+- **21 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a task-list runner (one session per entry), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
 - **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are _derived from its own text_, so the two cannot drift apart.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 615 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 624 unit tests, smoke test against the live API.
 
 ---
 
@@ -68,7 +68,7 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 615 unit tests
+npm test           # 624 unit tests
 ```
 
 ## Configuration
@@ -242,7 +242,7 @@ everything which can reach it may act as you on every connected repository.
 
 ## Tool reference
 
-20 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
+21 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
@@ -282,12 +282,13 @@ everything which can reach it may act as you on every connected repository.
 
 ### Convenience & review
 
-| Tool                                  | Description                                                                                                                                                                                                             | Key params                                                                                                                                                                                                                                                 |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `jules_run_task` ✎                    | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag. | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10)                                                                         |
-| `jules_get_session_diff`              | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).     | `session_id`, `summary?`                                                                                                                                                                                                                                   |
-| `jules_pull_session`                  | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                 | `session_id`                                                                                                                                                                                                                                               |
-| `jules_create_session_from_issue` ✎🔍 | Turn a GitHub issue into a Jules task: fetch title, body, labels and the comment thread, fence all of it, and create a session. **`AUTO_CREATE_PR` is off unless you opt in** — see below.                              | `repo` (`owner/repo`), `issue_number`, `reason`, `source?`, `starting_branch?` (`main`), `title?`, `include_comments?` (true), `max_comments?` (100), `prompt_template?`, `allow_auto_create_pr?` (**false**), `require_plan_approval?` (true), `dry_run?` |
+| Tool                                  | Description                                                                                                                                                                                                                                                                                             | Key params                                                                                                                                                                                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jules_run_task` ✎                    | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag.                                                                                 | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10)                                                                         |
+| `jules_run_tasks` ✎🔍                 | Create **one session per entry in a task list** — N _different_ prompts. This is NOT `jules_run_task`'s `parallel`, which fans out a single prompt N times. Creates with bounded concurrency, polls every session to completion, and isolates per-entry failures. One audit record per created session. | `tasks` (array of `{prompt, title?, source?, starting_branch?, automation_mode?}`), `source`, `starting_branch`, `reason`, `auto_approve?` (true), `concurrency?` (10, max 10), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `dry_run?` (false)     |
+| `jules_get_session_diff`              | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).                                                                                     | `session_id`, `summary?`                                                                                                                                                                                                                                   |
+| `jules_pull_session`                  | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                                                                                                 | `session_id`                                                                                                                                                                                                                                               |
+| `jules_create_session_from_issue` ✎🔍 | Turn a GitHub issue into a Jules task: fetch title, body, labels and the comment thread, fence all of it, and create a session. **`AUTO_CREATE_PR` is off unless you opt in** — see below.                                                                                                              | `repo` (`owner/repo`), `issue_number`, `reason`, `source?`, `starting_branch?` (`main`), `title?`, `include_comments?` (true), `max_comments?` (100), `prompt_template?`, `allow_auto_create_pr?` (**false**), `require_plan_approval?` (true), `dry_run?` |
 
 **Input normalization:** `session_id` and `source` accept either a bare id or a full resource name (`sessions/abc`, `sources/github/owner/repo`) — both forms work.
 
@@ -594,7 +595,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (615 tests)
+npm test             # vitest run (624 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -649,7 +650,7 @@ new JulesClient(key, {
 - Remote deployment (Cloudflare Workers or similar) — needs per-tool authorization and rate limiting first
 - npm publish
 - Source auto-selection when only one is connected
-- ~~Bulk session creation from a task list~~ — done via `parallel` param on `jules_run_task`
+- ~~Bulk session creation from a task list~~ — done as `jules_run_tasks` (#50655), one session per entry. Worth reading the distinction: `jules_run_task`'s `parallel` already fanned out, but it repeats **one** prompt; a task list is N **different** prompts, which is a different feature. An earlier version of this line claimed `parallel` covered it, which was wrong.
 
 ## License
 
