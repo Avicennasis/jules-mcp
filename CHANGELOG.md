@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Validation is **pure** — it creates no live job to test an expression.
     - Configurable via `JULES_SCHEDULE_MIN_INTERVAL_SECONDS` (`0` disables).
 
+- **Prompts are scanned for credentials before they leave the machine.** Every
+  prompt is sent to a Google-operated VM and stored in session history, so a
+  pasted `.env` line or API key is exfiltration that no later cleanup can undo.
+  `jules_create_session`, `jules_run_task`, `jules_send_message` and
+  `jules_schedule_task` now refuse a prompt that matches a credential pattern
+  (AWS key ids, GitHub tokens/PATs, Google API keys, Slack tokens, PEM
+  private-key headers, bearer tokens, and high-entropy `key: value`
+  assignments), naming only the **pattern class** — never the value — and the
+  value is never written to the audit record. Pass `allow_secret: true` with a
+  reason to send one deliberately; the audit record is redacted either way.
+
 ## [0.8.0] - 2026-09-06
 
 ### Added

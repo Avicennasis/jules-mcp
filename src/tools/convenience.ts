@@ -11,6 +11,7 @@ import {
 } from '../types.js';
 import { JulesAPIError } from '../errors.js';
 import { checkSourceAllowed } from '../allowlist.js';
+import { scanPrompt } from '../secrets.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -203,6 +204,12 @@ export function registerConvenienceTools(
                 .describe(
                     "Number of parallel sessions to create with the same prompt (1-10, default 1). Each runs independently. Inspired by the Jules CLI's --parallel flag.",
                 ),
+            allow_secret: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Send the prompt even if it looks like it contains a credential. Requires a reason; the value is redacted from the audit record.',
+                ),
         },
         async ({
             prompt,
@@ -215,6 +222,7 @@ export function registerConvenienceTools(
             poll_interval_ms,
             timeout_ms,
             parallel,
+            allow_secret,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
 
@@ -234,6 +242,35 @@ export function registerConvenienceTools(
                     payload: { denied_by: 'allowlist', repo: gate.repo },
                 });
                 return errorResponse(new JulesAPIError(gate.message, 403));
+            }
+
+            // #50431: refuse a prompt that looks like it carries a credential
+            // before any session is created. See src/secrets.ts.
+            const scan = scanPrompt(prompt, {
+                allowSecret: allow_secret === true,
+                reason,
+            });
+            if (!scan.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: normalizedSource,
+                    reason,
+                    payload: {
+                        denied_by: 'secret-scan',
+                        pattern_class: scan.hit?.patternClass,
+                    },
+                });
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify(scan.error, null, 2),
+                        },
+                    ],
+                    isError: true,
+                };
             }
 
             // --- Parallel mode: fan out N sessions, poll all concurrently ---
@@ -270,7 +307,7 @@ export function registerConvenienceTools(
                             reason,
                             target: s.id,
                             payload: {
-                                prompt,
+                                prompt: scan.auditPrompt,
                                 title,
                                 mode: 'run_task_parallel',
                                 parallel,
@@ -338,7 +375,7 @@ export function registerConvenienceTools(
                         service: normalizedSource,
                         reason,
                         payload: {
-                            prompt,
+                            prompt: scan.auditPrompt,
                             error: String(error),
                             mode: 'run_task_parallel',
                         },
@@ -368,7 +405,11 @@ export function registerConvenienceTools(
                     service: normalizedSource,
                     reason,
                     target: session.id,
-                    payload: { prompt, title, mode: 'run_task' },
+                    payload: {
+                        prompt: scan.auditPrompt,
+                        title,
+                        mode: 'run_task',
+                    },
                 });
 
                 // 2. Poll until terminal or needs action (shared helper)
@@ -461,7 +502,11 @@ export function registerConvenienceTools(
                     action: 'POST_FAIL',
                     service: normalizedSource,
                     reason,
-                    payload: { prompt, error: String(error), mode: 'run_task' },
+                    payload: {
+                        prompt: scan.auditPrompt,
+                        error: String(error),
+                        mode: 'run_task',
+                    },
                 });
                 return errorResponse(error);
             }

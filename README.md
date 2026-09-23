@@ -443,6 +443,12 @@ Schedules persist to `~/.local/share/jules-mcp/schedules.enc`, **encrypted with 
 
 > **Security note — auto-generated key.** When `JULES_ENCRYPTION_KEY` is unset, the auto-generated key is persisted as plaintext hex at `~/.local/share/jules-mcp/.key` (file mode `0600`, directory `0700`, re-tightened on every load). That protects against other unprivileged users, but anyone who can read your home directory — root, backup processes, or a misconfigured share — can decrypt `schedules.enc` with it. On multi-user or shared systems, set `JULES_ENCRYPTION_KEY` from your secret manager instead so the key never touches disk. Schedule entries can contain prompts and repo names; treat them accordingly.
 
+## Scanning prompts for secrets
+
+Every prompt is sent to a Google-operated VM and persisted in the session's history, so a pasted `.env` line or API key in a prompt is exfiltration that no later cleanup can undo. `jules_create_session`, `jules_run_task`, `jules_send_message` and `jules_schedule_task` scan the prompt before sending and **refuse** one that matches a credential pattern — AWS key ids, GitHub tokens/PATs, Google API keys, Slack tokens, PEM private-key headers, bearer tokens, and high-entropy `key: value` assignments. The refusal names only the **pattern class**, never the value, and the value is never written to the audit record.
+
+It is a best-effort guardrail, not a boundary: a secret split across lines, base64-wrapped, or assembled at runtime is invisible to it. When you must send one deliberately, pass `allow_secret: true` with a reason; the audit record is redacted either way.
+
 ## Bounding which repos a session may touch
 
 `JULES_ALLOWED_REPOS` is the guardrail worth having: there are hundreds of connected sources, and a Jules session writes a branch and can open a PR. Filtering what an agent _reads_ is guesswork; bounding what it may _write to_ is not.
