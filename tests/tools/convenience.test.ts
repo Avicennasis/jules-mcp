@@ -410,7 +410,27 @@ describe('run_task — states outside the known vocabulary', () => {
         const result = await run();
 
         expect(getSession).toHaveBeenCalled();
-        expect(result.isError).toBe(true);
         expect(result.content[0].text).toContain('Timed out');
+    });
+
+    // #50425. A timeout used to come back as `status: ERROR`, `code: 408`,
+    // `isError: true` — a terminal outcome for a session that legitimately runs
+    // for 20 minutes, leaving the model to reconstruct the follow-up itself. It
+    // is a handoff now: not an error, and the exact call to resume is named.
+    it('a deadline expiry is a TIMEOUT handoff, not an error', async () => {
+        const { run } = harness('IN_PROGRESS', ['IN_PROGRESS']);
+        const result = await run();
+
+        expect(result.isError).toBeFalsy();
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed.status).toBe('TIMEOUT');
+        expect(parsed.session_id).toBe('x');
+        expect(parsed.state).toBe('IN_PROGRESS');
+        expect(parsed.resume).toEqual({
+            tool: 'jules_get_session',
+            arguments: { session_id: 'x' },
+        });
+        expect(parsed.message).toContain('jules_get_session');
+        expect(parsed.message).toContain('"x"');
     });
 });

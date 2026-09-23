@@ -175,7 +175,7 @@ function outcomeNote(o: PollOutcome): string {
         case 'unknown_state':
             return `Stopped at state ${o.session.state}, which this server does not recognise — check the session in the Jules web app. Reported verbatim rather than polled, so this is not a timeout.`;
         case 'timeout':
-            return `Timed out while still ${o.session.state} — poll with jules_get_session.`;
+            return `Timed out while still ${o.session.state} — resume with jules_get_session(session_id: "${o.session.id}").`;
         case 'cancelled':
             return `Cancelled by the client while ${o.session.state}. The session keeps running on Jules — poll it with jules_get_session.`;
         case 'error':
@@ -535,19 +535,36 @@ export function registerConvenienceTools(
                 }
 
                 if (outcome.outcome === 'timeout') {
+                    // A timeout is a HANDOFF, not a failure (#50425). A Jules
+                    // session can legitimately run for 20 minutes; the old
+                    // `status: ERROR` + `isError: true` told the model the call
+                    // had failed and left it to reconstruct the follow-up. It
+                    // gets the session id, the state it stopped in, and the
+                    // exact call to resume with instead.
                     return {
                         content: [
                             {
                                 type: 'text' as const,
-                                text: JSON.stringify({
-                                    status: 'ERROR',
-                                    message: `Timed out after ${timeout_ms}ms. Session is still ${outcome.session.state}.`,
-                                    code: 408,
-                                    session: formatSession(outcome.session),
-                                }),
+                                text: JSON.stringify(
+                                    {
+                                        status: 'TIMEOUT',
+                                        message: `Timed out after ${timeout_ms}ms; the session is still ${outcome.session.state} and keeps running on Jules. Resume by calling jules_get_session with session_id="${outcome.session.id}".`,
+                                        session_id: outcome.session.id,
+                                        state: outcome.session.state,
+                                        resume: {
+                                            tool: 'jules_get_session',
+                                            arguments: {
+                                                session_id:
+                                                    outcome.session.id,
+                                            },
+                                        },
+                                        session: formatSession(outcome.session),
+                                    },
+                                    null,
+                                    2,
+                                ),
                             },
                         ],
-                        isError: true,
                     };
                 }
 
