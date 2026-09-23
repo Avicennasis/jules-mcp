@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`jules_delete_schedule` is now its own tool, and `jules_list_schedules` is
+  read-only** (#50434). Deleting used to be
+  `jules_list_schedules(action: 'delete', schedule_id, reason)` — a destructive
+  operation hidden behind an action enum on a LIST tool, invisible to a model
+  scanning tool names and sharing a name with a read. The new tool requires
+  `reason` and `confirm_destructive=true`, emits the same `DELETE` audit record,
+  and returns a structured `404` for a schedule that does not exist.
+
+    **Breaking:** `action`, `schedule_id` and `reason` are gone from
+    `jules_list_schedules`. Callers using `action: 'delete'` must switch to
+    `jules_delete_schedule`. The old form is removed rather than deprecated —
+    it was the only caller, and keeping a destructive alias alive is the shape
+    this change exists to remove.
+
 ## [0.8.0] - 2026-09-06
 
 ### Added
