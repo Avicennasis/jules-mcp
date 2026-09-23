@@ -224,6 +224,31 @@ describe('buildFencedPrompt', () => {
         expect(framing).toMatch(/never .*instructions/i);
     });
 
+    // #50769, rules adapted from sanjay3290/jules-pr-reviewer (MIT) — the
+    // three instruction rules no other surveyed repo carried. Injection
+    // detection that can block is a denial-of-service: anyone can halt a PR by
+    // writing a trigger phrase.
+    it('instructs the model to REPORT an attempt, never to block on it', () => {
+        const framing = framingOf(buildFencedPrompt(instructions, fields));
+        expect(framing).toMatch(/REPORT|report/);
+        expect(framing).toMatch(/never[^.]*(fail|block)/i);
+    });
+
+    it('carries false-positive guidance distinguishing imperative prose', () => {
+        const framing = framingOf(buildFencedPrompt(instructions, fields));
+        expect(framing).toMatch(/imperative/i);
+        expect(framing).toMatch(/addressed to you/i);
+    });
+
+    it('fences benign imperative prose byte-identically — nothing is rewritten', () => {
+        const prose =
+            'Test plan:\n- run `npm test`\n- do NOT edit dist/\n- verify the checklist';
+        const prompt = buildFencedPrompt(instructions, [
+            { label: 'PR_BODY', content: prose },
+        ]);
+        expect(extractFenced(prompt, 'PR_BODY', nonceOf(prompt))).toBe(prose);
+    });
+
     // The fence closes the first hop only: Jules has live web access and
     // fetches URLs given in a prompt (measured 2026-08-31, #50644). A URL
     // inside fenced data is therefore a second channel the fence cannot
