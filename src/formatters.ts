@@ -49,6 +49,55 @@ export function describeState(state: SessionState): string {
     return STATE_DESCRIPTIONS[state] ?? `Unknown state: ${state}`;
 }
 
+/**
+ * Layered character budgets for tool output (#50417).
+ *
+ * Before this, the only truncation was `truncatePatch`'s line cap — patch-only,
+ * and it told the caller nothing about how to see the rest, so an LLM that hit
+ * it had no next move. The reference implementation
+ * (georgeracu/google-jules-mcp-server, `activities/format.ts`) layers a budget
+ * per item / per page / per detail view / per diff, and names the recovery in
+ * the truncation message itself. Same shape here.
+ */
+export const OUTPUT_BUDGETS = {
+    /** One item inside a listing. */
+    listItem: 800,
+    /** A whole page of items. */
+    listPage: 10_000,
+    /** A single detail view, which is already the fullest view of one thing. */
+    detail: 8_000,
+    /** A diff. Large by nature, so the recovery path matters most here. */
+    diff: 2_000,
+} as const;
+
+/**
+ * Trim `text` to `budget` characters, appending a message that either names the
+ * exact tool call which expands the elided content, or says outright that the
+ * remainder is unrecoverable — never implies a retry that cannot work (#50417).
+ *
+ * `recovery` is the tool call to name, e.g.
+ * `jules_get_activity with session_id="s1" and activity_id="7"`. Pass null when
+ * there is no fuller view.
+ *
+ * The hint is appended ON TOP of the budget rather than counted against it, so
+ * the returned string can exceed `budget` by the hint's length. That is
+ * deliberate: a truncation with no recovery path is the defect this replaces.
+ */
+export function applyCharBudget(
+    text: string,
+    budget: number,
+    recovery: string | null,
+): string {
+    if (text.length <= budget) {
+        return text;
+    }
+    const omitted = text.length - budget;
+    const note = recovery
+        ? `... output truncated: ${omitted} of ${text.length} characters omitted. To read the rest, call ${recovery}.`
+        : `... output truncated: ${omitted} of ${text.length} characters omitted. The remainder is NOT retrievable — this is already the fullest view of it.`;
+    return `${text.slice(0, budget)}\n\n${note}`;
+}
+
 export function truncatePatch(patch: string, maxLines = 50): string {
     const lines = patch.split('\n');
     if (lines.length <= maxLines) {
