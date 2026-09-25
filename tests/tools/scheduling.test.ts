@@ -112,9 +112,11 @@ describe('scheduling tools', () => {
     });
 
     it('jules_delete_schedule deletes and emits an audit record', async () => {
-        mockManager.list = vi.fn().mockReturnValue([
-            { id: 'sched-1', source: 'sources/github/owner/repo' },
-        ]);
+        mockManager.list = vi
+            .fn()
+            .mockReturnValue([
+                { id: 'sched-1', source: 'sources/github/owner/repo' },
+            ]);
         const handler = registeredTools.get('jules_delete_schedule')!.handler;
         const result = await handler({
             schedule_id: 'sched-1',

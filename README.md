@@ -275,11 +275,11 @@ everything which can reach it may act as you on every connected repository.
 
 ### Scheduling
 
-| Tool                      | Description                                                                               | Key params                                                                                                                 |
-| ------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `jules_schedule_task` ✎🔍    | Schedule a recurring coding task (cron). Validates the cron expression before persisting. | `cron`, `prompt`, `source`, `starting_branch`, `label`, `require_plan_approval?`, `automation_mode?`, `reason`, `dry_run?` |
-| `jules_list_schedules`       | List all schedules. Read-only.                                                            | —                                                                                                                          |
-| `jules_delete_schedule` ✎🔥  | **Permanently** delete a schedule (irreversible). Guarded by `confirm_destructive`; re-create with `jules_schedule_task`. | `schedule_id`, `reason`, `confirm_destructive` (default false)                                                              |
+| Tool                        | Description                                                                                                               | Key params                                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `jules_schedule_task` ✎🔍   | Schedule a recurring coding task (cron). Validates the cron expression before persisting.                                 | `cron`, `prompt`, `source`, `starting_branch`, `label`, `require_plan_approval?`, `automation_mode?`, `reason`, `dry_run?` |
+| `jules_list_schedules`      | List all schedules. Read-only.                                                                                            | —                                                                                                                          |
+| `jules_delete_schedule` ✎🔥 | **Permanently** delete a schedule (irreversible). Guarded by `confirm_destructive`; re-create with `jules_schedule_task`. | `schedule_id`, `reason`, `confirm_destructive` (default false)                                                             |
 
 ### Convenience & review
 
