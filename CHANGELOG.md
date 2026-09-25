@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Corporate proxy support** (#50424). `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
+  (and their lowercase forms) are now honored for outbound requests to the Jules
+  API and GitHub; previously the server was simply unusable behind a proxy.
+
+    When a proxy is configured, requests go through undici's
+    `EnvHttpProxyAgent` and **undici's own `fetch`**. The two fetch
+    implementations do not share a dispatcher type, and handing an undici
+    dispatcher to the global fetch silently drops response headers —
+    `content-encoding` and `retry-after` among them. `retry-after` feeds the 429
+    backoff, so losing it would be a behavioural regression.
+
+    The transport is chosen lazily and cached against the proxy env value, so a
+    proxy set after import is honored and a process with no proxy pays nothing
+    and never loads undici. Adds `undici` as a dependency, imported only on the
+    proxy path.
+
 ### Changed
 
 - **`jules_delete_schedule` is now its own tool, and `jules_list_schedules` is
