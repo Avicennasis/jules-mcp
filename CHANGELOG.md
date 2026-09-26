@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A local dispatch log, so session ids survive context loss (#50646).**
+  `jules_run_task` (single and parallel) now records every created session — id,
+  url, title, source, branch and creation time — to
+  `~/.local/share/jules-mcp/dispatches.jsonl`, one entry per call, and the new
+  **`jules_list_dispatches`** tool reads it back (newest batch first;
+  `check_status` re-reads each session from Jules to answer "is it done?").
+
+    A **second sink**, not an extension of the audit log, and deliberately so:
+    the audit's primary sink on this host is `inkwell-emit`, and the local
+    `audit.jsonl` fallback is written only when inkwell is absent — so the audit
+    is not reliably locally readable, which is exactly what recovery needs. The
+    write is tolerant: a bookkeeping failure degrades to a warning that names the
+    ids, and never fails or blocks a dispatch whose sessions are already running
+    on Jules.
+
 - **Corporate proxy support** (#50424). `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
   (and their lowercase forms) are now honored for outbound requests to the Jules
   API and GitHub; previously the server was simply unusable behind a proxy.
