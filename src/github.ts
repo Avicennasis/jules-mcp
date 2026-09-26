@@ -7,7 +7,8 @@
  * for an MCP server:
  *
  * - Octokit is a large dependency for four fields off two endpoints, and this
- *   repo has kept its tree deliberately small (SDK, zod, node-cron).
+ *   repo has kept its tree deliberately small (SDK, zod, node-cron; undici
+ *   exists only as the proxy transport, imported lazily — see src/transport.ts).
  * - `gh` is a *runtime* dependency on the host's PATH and on `gh auth` state.
  *   An MCP server runs wherever its client runs — a container, a launchd job,
  *   someone else's laptop — and "works on the author's machine" is exactly the
@@ -25,6 +26,8 @@
  * before it enters a prompt. Nothing here sanitizes; that is deliberate, see
  * the fence's doc comment.
  */
+
+import { resolveFetch } from './transport.js';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -239,7 +242,9 @@ async function getJson<T>(
     token: string | undefined,
     timeoutMs: number,
 ): Promise<T> {
-    const response = await fetch(url, {
+    // Proxy-aware transport, same as the Jules client (#50424).
+    const doFetch = await resolveFetch();
+    const response = await doFetch(url, {
         method: 'GET',
         headers: headers(token),
         signal: AbortSignal.timeout(timeoutMs),
