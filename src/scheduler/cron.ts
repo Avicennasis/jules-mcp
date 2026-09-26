@@ -4,6 +4,7 @@ import type { ScheduleEntry } from '../types.js';
 import type { ScheduleStore } from './persistence.js';
 import type { JulesClient } from '../jules-client.js';
 import { emitAudit } from '../audit.js';
+import { checkCronInterval } from './cron-interval.js';
 
 export class ScheduleManager {
     private readonly store: ScheduleStore;
@@ -31,6 +32,13 @@ export class ScheduleManager {
     add(input: Omit<ScheduleEntry, 'id' | 'createdAt'>): ScheduleEntry {
         if (!cron.validate(input.cron)) {
             throw new Error(`Invalid cron expression: "${input.cron}"`);
+        }
+        // Defense in depth: the tool enforces this too and returns a structured
+        // error, but any other caller must not be able to store a schedule that
+        // fires faster than the quota allows (#50433).
+        const verdict = checkCronInterval(input.cron);
+        if (!verdict.ok) {
+            throw new Error(verdict.message);
         }
 
         const entry: ScheduleEntry = {

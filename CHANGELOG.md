@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`jules_schedule_task` now refuses a cron expression that fires more often
+  than a configurable minimum (default hourly).** A schedule was checked only
+  for _syntactic_ validity, so `* * * * *` was accepted and would have fired
+  1,440 Jules sessions a day, unattended — the scheduler is in-process and
+  nothing is watching. The gate computes the minimum interval between fires by
+  scanning a bounded window at the expression's own granularity (#50433):
+    - 5-field and 6-field expressions are both handled, and the **seconds**
+      field is accounted for, so an hourly-looking `* * * * * *` (which fires
+      every second) is refused rather than read as hourly.
+    - The refusal is a structured error naming the computed interval and the
+      minimum; `dry_run` reports `computed_interval_seconds` for any expression.
+    - Validation is **pure** — it creates no live job to test an expression.
+    - Configurable via `JULES_SCHEDULE_MIN_INTERVAL_SECONDS` (`0` disables).
+
+- **Prompts are scanned for credentials before they leave the machine.** Every
+  prompt is sent to a Google-operated VM and stored in session history, so a
+  pasted `.env` line or API key is exfiltration that no later cleanup can undo.
+  `jules_create_session`, `jules_run_task`, `jules_send_message` and
+  `jules_schedule_task` now refuse a prompt that matches a credential pattern
+  (AWS key ids, GitHub tokens/PATs, Google API keys, Slack tokens, PEM
+  private-key headers, bearer tokens, and high-entropy `key: value`
+  assignments), naming only the **pattern class** — never the value — and the
+  value is never written to the audit record. Pass `allow_secret: true` with a
+  reason to send one deliberately; the audit record is redacted either way.
 - **Layered output budgets with in-band recovery hints (#50417).** `applyCharBudget` + `OUTPUT_BUDGETS` replace ad-hoc truncation. Before this the only truncation was `truncatePatch`'s line cap — patch-only, and it told the caller nothing about how to see the rest, so an LLM that hit it had no next move. Now `jules_list_activities` (per-item 800, page 10k), `jules_get_activity` (detail 8k) and `jules_get_session_diff` (diff 2k) each truncate at their own ceiling, and the truncation message names the exact tool call that expands the elided content — `jules_get_activity` with the activity id, `jules_list_activities` with the page token, `jules_pull_session` for the raw patch. Where no fuller view exists (`jules_get_activity`) the message says the remainder is **NOT retrievable** rather than implying a retry that cannot work.
 - **`jules_run_tasks` — one session per entry in a task LIST (#50655).** `jules_run_task`'s `parallel` repeats **one** prompt N times; this takes N **different** prompts. Entries are `{prompt, title?, source?, starting_branch?, automation_mode?}`, with `source`/`starting_branch`/`automation_mode` defaulting from shared args and overridable per entry. Creation is bounded by `concurrency` (default 10, the same politeness cap `parallel` uses — #50428 found no measured daily ceiling on the API), every session is polled to completion, per-entry creation failures and per-session poll failures are isolated and reported, and each created session emits its own audit record. `dry_run` renders every would-be request and creates nothing.
 

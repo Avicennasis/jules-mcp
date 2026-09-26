@@ -16,6 +16,7 @@ import {
 import { JulesAPIError, JulesStateError } from '../errors.js';
 import { loadGuidance, applyGuidance } from '../guidance.js';
 import { guardPageToken, guardPaginationDeadline } from '../pagination.js';
+import { scanPrompt } from '../secrets.js';
 import { checkSourceAllowed } from '../allowlist.js';
 
 function errorResponse(error: unknown) {
@@ -77,6 +78,12 @@ export function registerSessionTools(
                 .boolean()
                 .default(false)
                 .describe('Preview the request without executing'),
+            allow_secret: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Send the prompt even if it looks like it contains a credential. Requires a reason; the value is redacted from the audit record.',
+                ),
         },
         async ({
             prompt,
@@ -88,6 +95,7 @@ export function registerSessionTools(
             reason,
             include_guidance,
             dry_run,
+            allow_secret,
         }) => {
             const normalizedSource = normalizeResourceName(source, 'sources');
 
@@ -107,6 +115,37 @@ export function registerSessionTools(
                     payload: { denied_by: 'allowlist', repo: gate.repo },
                 });
                 return errorResponse(new JulesAPIError(gate.message, 403));
+            }
+
+            // #50431: a prompt goes to a Google-operated VM and is stored in
+            // session history, so a credential pasted into one is exfiltration
+            // that no later cleanup can undo. Refuse it before anything is
+            // sent; allow_secret overrides for deliberate cases.
+            const scan = scanPrompt(prompt, {
+                allowSecret: allow_secret === true,
+                reason,
+            });
+            if (!scan.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: normalizedSource,
+                    reason,
+                    payload: {
+                        denied_by: 'secret-scan',
+                        pattern_class: scan.hit?.patternClass,
+                    },
+                });
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify(scan.error, null, 2),
+                        },
+                    ],
+                    isError: true,
+                };
             }
 
             const body = {
@@ -164,7 +203,7 @@ export function registerSessionTools(
                     service: normalizedSource,
                     reason,
                     target: session.id,
-                    payload: { prompt, title },
+                    payload: { prompt: scan.auditPrompt, title },
                 });
                 return {
                     content: [
@@ -178,7 +217,7 @@ export function registerSessionTools(
                     action: 'POST_FAIL',
                     service: normalizedSource,
                     reason,
-                    payload: { prompt, error: String(error) },
+                    payload: { prompt: scan.auditPrompt, error: String(error) },
                 });
                 return errorResponse(error);
             }
@@ -537,8 +576,40 @@ export function registerSessionTools(
             reason: z
                 .string()
                 .describe('Why this message is being sent (for audit log)'),
+            allow_secret: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Send the message even if it looks like it contains a credential. Requires a reason; the value is redacted from the audit record.',
+                ),
         },
-        async ({ session_id, message, reason }) => {
+        async ({ session_id, message, reason, allow_secret }) => {
+            const scan = scanPrompt(message, {
+                allowSecret: allow_secret === true,
+                reason,
+            });
+            if (!scan.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'coding-task',
+                    action: 'DENY',
+                    service: session_id,
+                    reason,
+                    payload: {
+                        denied_by: 'secret-scan',
+                        pattern_class: scan.hit?.patternClass,
+                    },
+                });
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify(scan.error, null, 2),
+                        },
+                    ],
+                    isError: true,
+                };
+            }
             try {
                 const sent = await client.sendMessage(session_id, message);
 
@@ -565,7 +636,7 @@ export function registerSessionTools(
                     service: session?.sourceContext?.source ?? session_id,
                     reason,
                     target: session?.id ?? session_id,
-                    payload: { message },
+                    payload: { message: scan.auditPrompt },
                 });
                 return {
                     content: [
@@ -584,7 +655,10 @@ export function registerSessionTools(
                     action: 'POST_FAIL',
                     service: session_id,
                     reason,
-                    payload: { message, error: String(error) },
+                    payload: {
+                        message: scan.auditPrompt,
+                        error: String(error),
+                    },
                 });
                 return errorResponse(error);
             }
