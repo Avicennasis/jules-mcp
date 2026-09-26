@@ -4,6 +4,7 @@ import {
     formatActivity,
     formatPlan,
     describeState,
+    nextStepFor,
     truncatePatch,
     stripBinaryHunks,
     stripLockfileDiffs,
@@ -27,6 +28,50 @@ describe('describeState', () => {
         expect(describeState('QUEUED')).toBe('Queued — waiting to start');
         expect(describeState('AWAITING_PLAN_APPROVAL')).toContain('plan');
         expect(describeState('COMPLETED')).toContain('Complete');
+    });
+});
+
+// #50440 -- state -> concrete next tool call, appended to the full session
+// rendering only.
+describe('state next steps (#50440)', () => {
+    const base: Session = {
+        name: 'sessions/x',
+        id: 'x',
+        prompt: 'p',
+        sourceContext: { source: 'sources/github/o/r' },
+        state: 'QUEUED',
+        createTime: '2026-01-01T00:00:00Z',
+        updateTime: '2026-01-01T00:00:00Z',
+        url: 'https://jules.google/sessions/x',
+    };
+
+    it('AWAITING_PLAN_APPROVAL names jules_approve_plan and jules_get_session_diff', () => {
+        const out = formatSession({ ...base, state: 'AWAITING_PLAN_APPROVAL' });
+        expect(out).toContain('jules_approve_plan');
+        expect(out).toContain('jules_get_session_diff');
+    });
+
+    it('FAILED names how to inspect activities', () => {
+        const out = formatSession({ ...base, state: 'FAILED' });
+        expect(out).toContain('jules_list_activities');
+    });
+
+    it('legacy PENDING maps to the QUEUED guidance', () => {
+        expect(nextStepFor('PENDING')).toBe(nextStepFor('QUEUED'));
+    });
+
+    it('adds no guidance for an unrecognised state', () => {
+        const out = formatSession({ ...base, state: 'MADE_UP_STATE' });
+        expect(out).not.toContain('Next:');
+    });
+
+    it('the compact listing carries no guidance', () => {
+        const out = formatSessionCompact({
+            ...base,
+            state: 'AWAITING_PLAN_APPROVAL',
+        });
+        expect(out).not.toContain('Next:');
+        expect(out).not.toContain('jules_approve_plan');
     });
 });
 

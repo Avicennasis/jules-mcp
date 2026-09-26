@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session output now names the next step.** `formatSession` appends a
+  state-appropriate action naming concrete tool calls — e.g.
+  `AWAITING_PLAN_APPROVAL` → `jules_get_session_diff` then `jules_approve_plan`,
+  `FAILED` → inspect `jules_list_activities` — instead of leaving the model to
+  infer it from the state label. Compact listings (`compact: true`) carry no
+  guidance, so browsing does not grow a paragraph per row (#50440).
+
 ### Fixed
 
 - **The schedule store can no longer lose every schedule to a partial write or
