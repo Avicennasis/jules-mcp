@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
 import { emitAudit } from '../audit.js';
+import { buildDispatchEntry, recordDispatch } from '../dispatch-log.js';
 import { formatSession } from '../formatters.js';
 import {
     TERMINAL_STATES,
@@ -278,6 +279,23 @@ export function registerConvenienceTools(
                         });
                     }
 
+                    // #50646: record the batch locally BEFORE polling, so its
+                    // ids survive context loss (compaction, a client close)
+                    // even if polling is interrupted. A write failure is a
+                    // warning, never a failure -- the sessions are already
+                    // running on Jules, which is the work that matters.
+                    const dispatchWrite = recordDispatch(
+                        buildDispatchEntry({
+                            mode: 'run_task_parallel',
+                            source: normalizedSource,
+                            branch: starting_branch,
+                            reason,
+                            prompt,
+                            parallel,
+                            sessions,
+                        }),
+                    );
+
                     // Poll ALL sessions to completion concurrently (B1-119 —
                     // previously this returned immediately, contradicting the
                     // tool description). A failure polling one session does
@@ -323,6 +341,19 @@ export function registerConvenienceTools(
                                                 : 'PARTIAL',
                                         message: `${completed}/${parallel} parallel sessions reached a terminal state.`,
                                         sessions: results,
+                                        // #50646: never let the reader assume
+                                        // the ids are recoverable when the
+                                        // write failed.
+                                        dispatch_log: dispatchWrite.ok
+                                            ? {
+                                                  ok: true,
+                                                  path: dispatchWrite.path,
+                                              }
+                                            : {
+                                                  ok: false,
+                                                  path: dispatchWrite.path,
+                                                  warning: `dispatch log write FAILED (${dispatchWrite.error}); these session ids are NOT persisted locally — copy them now, and use jules_list_dispatches to confirm.`,
+                                              },
                                     },
                                     null,
                                     2,
@@ -371,6 +402,23 @@ export function registerConvenienceTools(
                     payload: { prompt, title, mode: 'run_task' },
                 });
 
+                // #50646: record locally before polling, so the id survives
+                // context loss. A write failure is a warning, never a failure.
+                const dispatchWrite = recordDispatch(
+                    buildDispatchEntry({
+                        mode: 'run_task',
+                        source: normalizedSource,
+                        branch: starting_branch,
+                        reason,
+                        prompt,
+                        parallel: 1,
+                        sessions: [session],
+                    }),
+                );
+                const dispatchWarning = dispatchWrite.ok
+                    ? ''
+                    : `\n\n⚠ dispatch log write FAILED (${dispatchWrite.error}); this session id is NOT persisted locally — copy it now: ${session.id} (log path ${dispatchWrite.path}).`;
+
                 // 2. Poll until terminal or needs action (shared helper)
                 const outcome = await pollToCompletion(client, session, {
                     autoApprove: auto_approve,
@@ -386,7 +434,7 @@ export function registerConvenienceTools(
                         content: [
                             {
                                 type: 'text' as const,
-                                text: `Session has a plan ready for review. Use jules_approve_plan to approve it.\n\n${formatSession(outcome.session)}`,
+                                text: `Session has a plan ready for review. Use jules_approve_plan to approve it.\n\n${formatSession(outcome.session) + dispatchWarning}`,
                             },
                         ],
                     };
@@ -398,7 +446,7 @@ export function registerConvenienceTools(
                         content: [
                             {
                                 type: 'text' as const,
-                                text: `Session needs user feedback. Use jules_send_message to respond.\n\n${formatSession(outcome.session)}`,
+                                text: `Session needs user feedback. Use jules_send_message to respond.\n\n${formatSession(outcome.session) + dispatchWarning}`,
                             },
                         ],
                     };
@@ -409,7 +457,7 @@ export function registerConvenienceTools(
                         content: [
                             {
                                 type: 'text' as const,
-                                text: `Session is paused and will not progress on its own. Resume it in the Jules web app, or archive it with jules_archive_session.\n\n${formatSession(outcome.session)}`,
+                                text: `Session is paused and will not progress on its own. Resume it in the Jules web app, or archive it with jules_archive_session.\n\n${formatSession(outcome.session) + dispatchWarning}`,
                             },
                         ],
                     };
@@ -423,7 +471,7 @@ export function registerConvenienceTools(
                         content: [
                             {
                                 type: 'text' as const,
-                                text: `Session reached state ${outcome.session.state}, which this server does not recognise, so polling stopped rather than running to the timeout. Check it in the Jules web app.\n\n${formatSession(outcome.session)}`,
+                                text: `Session reached state ${outcome.session.state}, which this server does not recognise, so polling stopped rather than running to the timeout. Check it in the Jules web app.\n\n${formatSession(outcome.session) + dispatchWarning}`,
                             },
                         ],
                     };
@@ -438,7 +486,7 @@ export function registerConvenienceTools(
                                     status: 'ERROR',
                                     message: `Timed out after ${timeout_ms}ms. Session is still ${outcome.session.state}.`,
                                     code: 408,
-                                    session: formatSession(outcome.session),
+                                    session: formatSession(outcome.session) + dispatchWarning,
                                 }),
                             },
                         ],
@@ -450,7 +498,7 @@ export function registerConvenienceTools(
                     content: [
                         {
                             type: 'text' as const,
-                            text: formatSession(outcome.session),
+                            text: formatSession(outcome.session) + dispatchWarning,
                         },
                     ],
                 };

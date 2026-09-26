@@ -15,6 +15,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **README/DESIGN overclaim corrected.** The roadmap said bulk task-list creation was "done via `parallel` param on `jules_run_task`", and DESIGN.md listed it as still open — two documents contradicting each other, neither matching the code. Both now describe the shipped tool and the `parallel`-vs-task-list distinction explicitly.
+- **Session output now names the next step.** `formatSession` appends a
+  state-appropriate action naming concrete tool calls — e.g.
+  `AWAITING_PLAN_APPROVAL` → `jules_get_session_diff` then `jules_approve_plan`,
+  `FAILED` → inspect `jules_list_activities` — instead of leaving the model to
+  infer it from the state label. Compact listings (`compact: true`) carry no
+  guidance, so browsing does not grow a paragraph per row (#50440).
+
+### Fixed
+
+- **The schedule store can no longer lose every schedule to a partial write or
+  an unreadable file.** `ScheduleStore` had three gaps (#50437, from a survey
+  of `savethepolarbears/jules-mcp-server`):
+    - **Atomic writes.** It wrote `schedules.enc` in place, so a write that died
+      partway truncated the only copy of every schedule. It now stages to a temp
+      file, `fsync`s it, then `rename(2)`s over the target (and `fsync`s the
+      directory), so an interrupted write leaves the previous file intact.
+    - **Corrupted-file backup.** A decrypt or parse failure used to be swallowed
+      by starting empty. An unreadable file is now copied to
+      `schedules.enc.corrupt-<timestamp>` before anything can overwrite it, and
+      the reason is surfaced on `ScheduleStore.lastLoadError`.
+    - **Per-file salt.** The key was derived from the fixed string
+      `'jules-mcp-salt'`, identical across every install. A random per-file salt
+      is now stored in a versioned (`v2`) envelope. Existing `v1` files still
+      decrypt and are upgraded on the next write.
+
+### Added
+
+- **A local dispatch log, so session ids survive context loss (#50646).**
+  `jules_run_task` (single and parallel) now records every created session — id,
+  url, title, source, branch and creation time — to
+  `~/.local/share/jules-mcp/dispatches.jsonl`, one entry per call, and the new
+  **`jules_list_dispatches`** tool reads it back (newest batch first;
+  `check_status` re-reads each session from Jules to answer "is it done?").
+
+    A **second sink**, not an extension of the audit log, and deliberately so:
+    the audit's primary sink on this host is `inkwell-emit`, and the local
+    `audit.jsonl` fallback is written only when inkwell is absent — so the audit
+    is not reliably locally readable, which is exactly what recovery needs. The
+    write is tolerant: a bookkeeping failure degrades to a warning that names the
+    ids, and never fails or blocks a dispatch whose sessions are already running
+    on Jules.
+
+- **Corporate proxy support** (#50424). `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`
+  (and their lowercase forms) are now honored for outbound requests to the Jules
+  API and GitHub; previously the server was simply unusable behind a proxy.
+
+    When a proxy is configured, requests go through undici's
+    `EnvHttpProxyAgent` and **undici's own `fetch`**. The two fetch
+    implementations do not share a dispatcher type, and handing an undici
+    dispatcher to the global fetch silently drops response headers —
+    `content-encoding` and `retry-after` among them. `retry-after` feeds the 429
+    backoff, so losing it would be a behavioural regression.
+
+    The transport is chosen lazily and cached against the proxy env value, so a
+    proxy set after import is honored and a process with no proxy pays nothing
+    and never loads undici. Adds `undici` as a dependency, imported only on the
+    proxy path.
+
+### Changed
+
+- **`jules_delete_schedule` is now its own tool, and `jules_list_schedules` is
+  read-only** (#50434). Deleting used to be
+  `jules_list_schedules(action: 'delete', schedule_id, reason)` — a destructive
+  operation hidden behind an action enum on a LIST tool, invisible to a model
+  scanning tool names and sharing a name with a read. The new tool requires
+  `reason` and `confirm_destructive=true`, emits the same `DELETE` audit record,
+  and returns a structured `404` for a schedule that does not exist.
+
+    **Breaking:** `action`, `schedule_id` and `reason` are gone from
+    `jules_list_schedules`. Callers using `action: 'delete'` must switch to
+    `jules_delete_schedule`. The old form is removed rather than deprecated —
+    it was the only caller, and keeping a destructive alias alive is the shape
+    this change exists to remove.
 
 ## [0.8.0] - 2026-09-06
 

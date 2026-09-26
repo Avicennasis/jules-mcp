@@ -50,52 +50,45 @@ export function describeState(state: SessionState): string {
 }
 
 /**
- * Layered character budgets for tool output (#50417).
+ * State -> the concrete next tool call (#50440).
  *
- * Before this, the only truncation was `truncatePatch`'s line cap — patch-only,
- * and it told the caller nothing about how to see the rest, so an LLM that hit
- * it had no next move. The reference implementation
- * (georgeracu/google-jules-mcp-server, `activities/format.ts`) layers a budget
- * per item / per page / per detail view / per diff, and names the recovery in
- * the truncation message itself. Same shape here.
+ * STATE_DESCRIPTIONS says what a state IS; this says what to DO about it, so a
+ * model is told rather than inferring. Deliberately names real tool calls, and
+ * is appended only to the full `formatSession` — compact listings omit it, so a
+ * one-line-per-session browse does not grow a paragraph per row.
  */
-export const OUTPUT_BUDGETS = {
-    /** One item inside a listing. */
-    listItem: 800,
-    /** A whole page of items. */
-    listPage: 10_000,
-    /** A single detail view, which is already the fullest view of one thing. */
-    detail: 8_000,
-    /** A diff. Large by nature, so the recovery path matters most here. */
-    diff: 2_000,
-} as const;
+const STATE_NEXT_STEPS: Record<string, string> = {
+    QUEUED: 'Next: poll with jules_get_session, or read jules_list_activities once it starts.',
+    PLANNING:
+        'Next: poll with jules_get_session; the plan appears under jules_list_activities.',
+    AWAITING_PLAN_APPROVAL:
+        'Next: review the plan with jules_get_session_diff, then jules_approve_plan to proceed, or jules_send_message to redirect.',
+    AWAITING_USER_FEEDBACK:
+        'Next: reply with jules_send_message, or jules_archive_session to abandon it.',
+    IN_PROGRESS:
+        'Next: poll with jules_get_session; review the result with jules_get_session_diff.',
+    PAUSED: 'Next: resume with jules_send_message, or jules_archive_session if abandoning it.',
+    FAILED: 'Next: inspect what happened with jules_list_activities / jules_get_activity.',
+    COMPLETED:
+        'Next: pull the changes with jules_pull_session, or review with jules_get_session_diff.',
+    COMPLETED_UNKNOWN:
+        'Next: the outcome was not reported — inspect jules_list_activities, then jules_pull_session if there are changes.',
+    CANCELLED:
+        'Next: this session was stopped; jules_archive_session to hide it from the active list.',
+    CANCELED:
+        'Next: this session was stopped; jules_archive_session to hide it from the active list.',
 
-/**
- * Trim `text` to `budget` characters, appending a message that either names the
- * exact tool call which expands the elided content, or says outright that the
- * remainder is unrecoverable — never implies a retry that cannot work (#50417).
- *
- * `recovery` is the tool call to name, e.g.
- * `jules_get_activity with session_id="s1" and activity_id="7"`. Pass null when
- * there is no fuller view.
- *
- * The hint is appended ON TOP of the budget rather than counted against it, so
- * the returned string can exceed `budget` by the hint's length. That is
- * deliberate: a truncation with no recovery path is the defect this replaces.
- */
-export function applyCharBudget(
-    text: string,
-    budget: number,
-    recovery: string | null,
-): string {
-    if (text.length <= budget) {
-        return text;
-    }
-    const omitted = text.length - budget;
-    const note = recovery
-        ? `... output truncated: ${omitted} of ${text.length} characters omitted. To read the rest, call ${recovery}.`
-        : `... output truncated: ${omitted} of ${text.length} characters omitted. The remainder is NOT retrievable — this is already the fullest view of it.`;
-    return `${text.slice(0, budget)}\n\n${note}`;
+    // Legacy aliases map to the same guidance as their canonical state.
+    PENDING:
+        'Next: poll with jules_get_session, or read jules_list_activities once it starts.',
+    RUNNING:
+        'Next: poll with jules_get_session; review the result with jules_get_session_diff.',
+    AWAITING_USER_INPUT:
+        'Next: reply with jules_send_message, or jules_archive_session to abandon it.',
+};
+
+export function nextStepFor(state: SessionState): string | undefined {
+    return STATE_NEXT_STEPS[state];
 }
 
 export function truncatePatch(patch: string, maxLines = 50): string {
@@ -378,6 +371,14 @@ export function formatSession(
                 parts.push(`  ${pr.description}`);
             }
         }
+    }
+
+    // #50440: tell the caller what to do next rather than leaving them to
+    // infer it. Never added to the compact listing.
+    const next = nextStepFor(state);
+    if (next) {
+        parts.push('');
+        parts.push(next);
     }
 
     return parts.join('\n');

@@ -13,12 +13,12 @@ Built on the **official** Jules REST API (`v1alpha`) with CLI-inspired features 
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **21 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a task-list runner (one session per entry), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
+- **22 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
 - **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are _derived from its own text_, so the two cannot drift apart.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
 - **Auditable**: every mutation requires a `reason` and can emit an audit record; `dry_run` previews mutations without calling the API.
-- **Typed & tested**: TypeScript, 632 unit tests, smoke test against the live API.
+- **Typed & tested**: TypeScript, 615 unit tests, smoke test against the live API.
 
 ---
 
@@ -68,19 +68,20 @@ git clone https://github.com/Avicennasis/jules-mcp.git
 cd jules-mcp
 npm install
 npm run build      # compiles TypeScript to dist/
-npm test           # 632 unit tests
+npm test           # 615 unit tests
 ```
 
 ## Configuration
 
 The server reads these environment variables:
 
-| Variable               | Required | Purpose                                                                                                                                                                                                                                                                                           |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JULES_API_KEY`        | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                                  |
-| `JULES_ENCRYPTION_KEY` | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling).       |
-| `JULES_ALLOWED_REPOS`  | no       | Comma-separated allowlist of repositories any session may target, supporting `owner/*` and a bare `*`. Enforced on `jules_create_session`, `jules_run_task`, `jules_schedule_task` and `jules_create_session_from_issue`. Unset means no restriction, and the server says which it is at startup. |
-| `GITHUB_TOKEN`         | no       | Token used to read issues. `GH_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN` are accepted as fallbacks, in that order. Unset works fine for public repos at GitHub's anonymous 60 requests/hour; a token raises that to 5000 and is required for private repos. Read-only scope is enough.            |
+| Variable                                  | Required | Purpose                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JULES_API_KEY`                           | **yes**  | Your Jules API key. Sent as the `X-Goog-Api-Key` header. The server refuses to start without it.                                                                                                                                                                                                                                                                                                        |
+| `JULES_ENCRYPTION_KEY`                    | no       | Passphrase used to encrypt persisted schedules (AES-256-GCM). If unset, the server auto-generates a key and stores it at `~/.local/share/jules-mcp/.key` (mode `0600`) — plaintext hex on disk, so on multi-user systems set this env var instead (see the security note under Scheduling).                                                                                                             |
+| `JULES_ALLOWED_REPOS`                     | no       | Comma-separated allowlist of repositories any session may target, supporting `owner/*` and a bare `*`. Enforced on `jules_create_session`, `jules_run_task`, `jules_schedule_task` and `jules_create_session_from_issue`. Unset means no restriction, and the server says which it is at startup.                                                                                                       |
+| `GITHUB_TOKEN`                            | no       | Token used to read issues. `GH_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN` are accepted as fallbacks, in that order. Unset works fine for public repos at GitHub's anonymous 60 requests/hour; a token raises that to 5000 and is required for private repos. Read-only scope is enough.                                                                                                                  |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | no       | Standard proxy environment, honored for outbound requests to the Jules API and GitHub (lowercase forms accepted). When a proxy is set, requests go through undici's `EnvHttpProxyAgent` and **undici's own `fetch`** — not the global one — so `retry-after` and `content-encoding` survive; `NO_PROXY` is honored for bypass. With no proxy set the global `fetch` is used and undici is never loaded. |
 
 Keep the API key out of source control. Pull it from your shell environment, a `.env` you don't commit, or your secret manager of choice. A `.env.example` is included.
 
@@ -242,7 +243,7 @@ everything which can reach it may act as you on every connected repository.
 
 ## Tool reference
 
-21 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
+22 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
@@ -275,10 +276,11 @@ everything which can reach it may act as you on every connected repository.
 
 ### Scheduling
 
-| Tool                      | Description                                                                               | Key params                                                                                                                 |
-| ------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `jules_schedule_task` ✎🔍 | Schedule a recurring coding task (cron). Validates the cron expression before persisting. | `cron`, `prompt`, `source`, `starting_branch`, `label`, `require_plan_approval?`, `automation_mode?`, `reason`, `dry_run?` |
-| `jules_list_schedules` ✎  | `list` all schedules, or `delete` one. `reason` required for delete.                      | `action` (`list`\|`delete`), `schedule_id?`, `reason?`                                                                     |
+| Tool                        | Description                                                                                                               | Key params                                                                                                                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `jules_schedule_task` ✎🔍   | Schedule a recurring coding task (cron). Validates the cron expression before persisting.                                 | `cron`, `prompt`, `source`, `starting_branch`, `label`, `require_plan_approval?`, `automation_mode?`, `reason`, `dry_run?` |
+| `jules_list_schedules`      | List all schedules. Read-only.                                                                                            | —                                                                                                                          |
+| `jules_delete_schedule` ✎🔥 | **Permanently** delete a schedule (irreversible). Guarded by `confirm_destructive`; re-create with `jules_schedule_task`. | `schedule_id`, `reason`, `confirm_destructive` (default false)                                                             |
 
 ### Convenience & review
 
@@ -286,6 +288,7 @@ everything which can reach it may act as you on every connected repository.
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `jules_run_task` ✎                    | One-shot: create → poll → auto-approve → wait → return. Returns early if it needs input. Supports `parallel` (1–10) to fan out N independent sessions with the same prompt, matching the Jules CLI's `--parallel` flag.                                                                                 | `prompt`, `source`, `starting_branch`, `title?`, `automation_mode?`, `reason`, `auto_approve?` (true), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `parallel?` (1, max 10)                                                                         |
 | `jules_run_tasks` ✎🔍                 | Create **one session per entry in a task list** — N _different_ prompts. This is NOT `jules_run_task`'s `parallel`, which fans out a single prompt N times. Creates with bounded concurrency, polls every session to completion, and isolates per-entry failures. One audit record per created session. | `tasks` (array of `{prompt, title?, source?, starting_branch?, automation_mode?}`), `source`, `starting_branch`, `reason`, `auto_approve?` (true), `concurrency?` (10, max 10), `poll_interval_ms?` (5000), `timeout_ms?` (600000), `dry_run?` (false)     |
+| `jules_list_dispatches`               | List sessions this server dispatched (`jules_run_task`, single or parallel), newest batch first, from the local dispatch log `~/.local/share/jules-mcp/dispatches.jsonl`. Survives context loss; set `check_status` to re-read each session from Jules ("is it done?").                                 | `limit?` (10), `batch_id?`, `check_status?` (false)                                                                                                                                                                                                        |
 | `jules_get_session_diff`              | A consolidated, review-friendly view: header + plan + the **final** changeset, with binary blobs (e.g. `.pyc`) summarized instead of dumped. Pass `summary=true` for just files + `+/-` line counts (no raw hunks).                                                                                     | `session_id`, `summary?`                                                                                                                                                                                                                                   |
 | `jules_pull_session`                  | Extract the final code changeset as a `git apply`-ready unified diff patch. Returns the raw patch, suggested commit message, and a per-file +/- summary. Mirrors the Jules CLI's `remote pull` command.                                                                                                 | `session_id`                                                                                                                                                                                                                                               |
 | `jules_create_session_from_issue` ✎🔍 | Turn a GitHub issue into a Jules task: fetch title, body, labels and the comment thread, fence all of it, and create a session. **`AUTO_CREATE_PR` is off unless you opt in** — see below.                                                                                                              | `repo` (`owner/repo`), `issue_number`, `reason`, `source?`, `starting_branch?` (`main`), `title?`, `include_comments?` (true), `max_comments?` (100), `prompt_template?`, `allow_auto_create_pr?` (**false**), `require_plan_approval?` (true), `dry_run?` |
@@ -595,7 +598,7 @@ scripts/
 ```bash
 npm run build        # tsc → dist/
 npm run dev          # tsc --watch
-npm test             # vitest run (632 tests)
+npm test             # vitest run (615 tests)
 npm run test:watch   # vitest watch
 npm run smoke        # live API smoke test (lists sources + recent sessions)
 npm start            # run the built server (stdio)
@@ -650,7 +653,7 @@ new JulesClient(key, {
 - Remote deployment (Cloudflare Workers or similar) — needs per-tool authorization and rate limiting first
 - npm publish
 - Source auto-selection when only one is connected
-- ~~Bulk session creation from a task list~~ — done as `jules_run_tasks` (#50655), one session per entry. Worth reading the distinction: `jules_run_task`'s `parallel` already fanned out, but it repeats **one** prompt; a task list is N **different** prompts, which is a different feature. An earlier version of this line claimed `parallel` covered it, which was wrong.
+- ~~Bulk session creation from a task list~~ — done via `parallel` param on `jules_run_task`
 
 ## License
 
