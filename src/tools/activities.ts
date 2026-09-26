@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
-import { formatActivity } from '../formatters.js';
+import {
+    applyCharBudget,
+    formatActivity,
+    OUTPUT_BUDGETS,
+} from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
 
 function errorResponse(error: unknown) {
@@ -51,7 +55,24 @@ export function registerActivityTools(
                     page_size,
                     page_token,
                 );
-                const text = result.activities.map(formatActivity).join('\n\n');
+                // #50417: budget per item, naming the drill-down that expands
+                // it, then budget the page as a whole and name the paging call.
+                const text = result.activities
+                    .map((a) =>
+                        applyCharBudget(
+                            formatActivity(a),
+                            OUTPUT_BUDGETS.listItem,
+                            `jules_get_activity with session_id="${session_id}" and activity_id="${a.id}"`,
+                        ),
+                    )
+                    .join('\n\n');
+                const budgeted = applyCharBudget(
+                    text,
+                    OUTPUT_BUDGETS.listPage,
+                    result.nextPageToken
+                        ? `jules_list_activities with session_id="${session_id}" and page_token="${result.nextPageToken}"`
+                        : `jules_list_activities with session_id="${session_id}" and a larger page_size`,
+                );
                 const response: any = {
                     status: 'OK',
                     count: result.activities.length,
@@ -62,7 +83,7 @@ export function registerActivityTools(
                     content: [
                         {
                             type: 'text' as const,
-                            text: `${JSON.stringify(response)}\n\n${text}`,
+                            text: `${JSON.stringify(response)}\n\n${budgeted}`,
                         },
                     ],
                 };
@@ -89,7 +110,14 @@ export function registerActivityTools(
                     content: [
                         {
                             type: 'text' as const,
-                            text: formatActivity(activity),
+                            text: applyCharBudget(
+                                formatActivity(activity),
+                                OUTPUT_BUDGETS.detail,
+                                // No fuller view exists for a single activity,
+                                // so the message says so rather than implying a
+                                // retry that cannot work (#50417).
+                                null,
+                            ),
                         },
                     ],
                 };
