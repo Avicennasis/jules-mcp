@@ -30,8 +30,9 @@ afterEach(() => {
 function harness() {
     const tools = new Map<string, { handler: Function }>();
     const server: any = {
-        tool: vi.fn((name: string, _d: string, _s: any, handler: Function) =>
-            void tools.set(name, { handler }),
+        tool: vi.fn(
+            (name: string, _d: string, _s: any, handler: Function) =>
+                void tools.set(name, { handler }),
         ),
     };
     const make = (state: string): Session =>

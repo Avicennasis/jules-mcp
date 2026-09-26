@@ -36,11 +36,15 @@ afterEach(() => {
 function harness(clientOver: Partial<JulesClient> = {}) {
     const tools = new Map<string, { handler: Function }>();
     const server: any = {
-        tool: vi.fn((name: string, _d: string, _s: any, handler: Function) =>
-            void tools.set(name, { handler }),
+        tool: vi.fn(
+            (name: string, _d: string, _s: any, handler: Function) =>
+                void tools.set(name, { handler }),
         ),
     };
-    const client = { getSession: vi.fn(), ...clientOver } as unknown as JulesClient;
+    const client = {
+        getSession: vi.fn(),
+        ...clientOver,
+    } as unknown as JulesClient;
     registerDispatchTools(server, client);
     return { tools, client };
 }
@@ -152,9 +156,7 @@ describe('jules_list_dispatches', () => {
             }),
             log,
         );
-        const getSession = vi
-            .fn()
-            .mockRejectedValue(new Error('404 gone'));
+        const getSession = vi.fn().mockRejectedValue(new Error('404 gone'));
         const { tools } = harness({ getSession: getSession as any });
         const handler = tools.get('jules_list_dispatches')!.handler;
         const res = await handler({ limit: 10, check_status: true });

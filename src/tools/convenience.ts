@@ -527,7 +527,9 @@ export function registerConvenienceTools(
                                     status: 'ERROR',
                                     message: `Timed out after ${timeout_ms}ms. Session is still ${outcome.session.state}.`,
                                     code: 408,
-                                    session: formatSession(outcome.session) + dispatchWarning,
+                                    session:
+                                        formatSession(outcome.session) +
+                                        dispatchWarning,
                                 }),
                             },
                         ],
@@ -539,7 +541,9 @@ export function registerConvenienceTools(
                     content: [
                         {
                             type: 'text' as const,
-                            text: formatSession(outcome.session) + dispatchWarning,
+                            text:
+                                formatSession(outcome.session) +
+                                dispatchWarning,
                         },
                     ],
                 };

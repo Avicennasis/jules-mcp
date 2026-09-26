@@ -53,7 +53,9 @@ export function registerDispatchTools(
             const newestFirst = selected.slice(-limit).reverse();
 
             const dispatches: Array<
-                Omit<DispatchEntry, 'sessions'> & { sessions: DispatchSession[] }
+                Omit<DispatchEntry, 'sessions'> & {
+                    sessions: DispatchSession[];
+                }
             > = [];
             for (const batch of newestFirst) {
                 const sessions: DispatchSession[] = [];
