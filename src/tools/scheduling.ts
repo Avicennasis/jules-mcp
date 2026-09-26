@@ -238,78 +238,9 @@ export function registerSchedulingTools(
 
     server.tool(
         'jules_list_schedules',
-        'List or delete scheduled Jules tasks',
-        {
-            action: z
-                .enum(['list', 'delete'])
-                .default('list')
-                .describe(
-                    '"list" to show all schedules, "delete" to remove one',
-                ),
-            schedule_id: z
-                .string()
-                .optional()
-                .describe('Schedule ID to delete (required for delete action)'),
-            reason: z
-                .string()
-                .optional()
-                .describe(
-                    'Why this schedule is being deleted (required for delete action)',
-                ),
-        },
-        async ({ action, schedule_id, reason }) => {
-            if (action === 'delete') {
-                if (!schedule_id || !reason) {
-                    return {
-                        content: [
-                            {
-                                type: 'text' as const,
-                                text: JSON.stringify({
-                                    status: 'ERROR',
-                                    message:
-                                        'schedule_id and reason are required for delete action',
-                                    code: 400,
-                                }),
-                            },
-                        ],
-                        isError: true,
-                    };
-                }
-                // Look up the entry source BEFORE removing so the audit captures it
-                const entry = manager.list().find((e) => e.id === schedule_id);
-                const removed = manager.remove(schedule_id);
-                if (removed) {
-                    await emitAudit({
-                        source: 'jules-mcp',
-                        category: 'scheduling',
-                        action: 'DELETE',
-                        service: entry?.source ?? schedule_id,
-                        reason,
-                        target: schedule_id,
-                    });
-                }
-                return {
-                    content: [
-                        {
-                            type: 'text' as const,
-                            text: JSON.stringify(
-                                removed
-                                    ? {
-                                          status: 'OK',
-                                          message: `Schedule ${schedule_id} deleted`,
-                                      }
-                                    : {
-                                          status: 'ERROR',
-                                          message: `Schedule ${schedule_id} not found`,
-                                          code: 404,
-                                      },
-                            ),
-                        },
-                    ],
-                    isError: !removed,
-                };
-            }
-
+        'List scheduled Jules tasks. Read-only — deleting a schedule is the separate, destructive jules_delete_schedule tool.',
+        {},
+        async () => {
             const schedules = manager.list();
             return {
                 content: [
@@ -320,6 +251,89 @@ export function registerSchedulingTools(
                                 status: 'OK',
                                 count: schedules.length,
                                 schedules,
+                            },
+                            null,
+                            2,
+                        ),
+                    },
+                ],
+            };
+        },
+    );
+
+    // #50434. Deleting used to be `jules_list_schedules(action: 'delete')`: an
+    // action enum on a LIST tool, so a destructive operation shared a name with
+    // a read and a model scanning tool names could not see it. It is its own
+    // tool now, marked destructive and gated like jules_delete_session.
+    server.tool(
+        'jules_delete_schedule',
+        'Permanently delete a scheduled Jules task. IRREVERSIBLE — re-create it with jules_schedule_task if needed. Requires confirm_destructive=true.',
+        {
+            schedule_id: z.string().describe('Schedule ID to delete'),
+            reason: z
+                .string()
+                .describe('Why this schedule is being deleted (for audit log)'),
+            confirm_destructive: z
+                .boolean()
+                .default(false)
+                .describe('Must be true to actually delete (safety guard)'),
+        },
+        async ({ schedule_id, reason, confirm_destructive }) => {
+            if (!confirm_destructive) {
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify({
+                                status: 'CONFIRMATION_REQUIRED',
+                                message:
+                                    'Deleting a schedule is irreversible. Re-call with confirm_destructive=true.',
+                            }),
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            // Look up the entry source BEFORE removing so the audit captures it
+            const entry = manager.list().find((e) => e.id === schedule_id);
+            const removed = manager.remove(schedule_id);
+            if (!removed) {
+                // Structured not-found, so a caller can tell "already gone" from
+                // "the delete failed".
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify(
+                                {
+                                    status: 'ERROR',
+                                    code: 404,
+                                    message: `Schedule ${schedule_id} not found`,
+                                },
+                                null,
+                                2,
+                            ),
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            await emitAudit({
+                source: 'jules-mcp',
+                category: 'scheduling',
+                action: 'DELETE',
+                service: entry?.source ?? schedule_id,
+                reason,
+                target: schedule_id,
+            });
+            return {
+                content: [
+                    {
+                        type: 'text' as const,
+                        text: JSON.stringify(
+                            {
+                                status: 'OK',
+                                message: `Schedule ${schedule_id} deleted`,
                             },
                             null,
                             2,

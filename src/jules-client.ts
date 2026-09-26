@@ -6,6 +6,7 @@ import {
 } from './errors.js';
 import { parseRetryAfterSeconds } from './retry-after.js';
 import { planRetry } from './retry.js';
+import { resolveFetch } from './transport.js';
 import {
     type Session,
     type Source,
@@ -86,6 +87,11 @@ export class JulesClient {
     ): Promise<T> {
         const url = `${BASE_URL}${path}`;
 
+        // Proxy-aware transport (#50424): the global fetch when no proxy is
+        // configured, undici's fetch + EnvHttpProxyAgent when one is. Resolved
+        // once per request and cached, so the no-proxy path costs nothing.
+        const doFetch = await resolveFetch();
+
         // A fresh timeout signal per attempt: an AbortSignal.timeout that has
         // already fired stays aborted, so reusing one would make every retry
         // abort instantly.
@@ -109,7 +115,7 @@ export class JulesClient {
 
             let response: Response;
             try {
-                response = await fetch(url, init);
+                response = await doFetch(url, init);
             } catch (err) {
                 // A timeout is our own deadline, not the server's advice, and
                 // is never retried. Anything else that throws out of fetch is a

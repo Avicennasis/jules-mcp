@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { JulesClient } from '../jules-client.js';
 import {
+    applyCharBudget,
     formatSessionDiff,
     summarizeSessionDiff,
     extractPatch,
@@ -10,6 +11,7 @@ import {
     detectTestFrameworkConflicts,
     detectCommentOnlyChanges,
     extractQualitySignals,
+    OUTPUT_BUDGETS,
     UNKNOWN_SOURCE,
 } from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
@@ -102,8 +104,21 @@ export function registerDiffTools(
                     text += `\n\n⚠️ Review warnings:\n${items.join('\n')}`;
                 }
 
+                // #50417: budget the rendered diff and name a real expansion
+                // path. `jules_pull_session` returns the raw patch without a
+                // character budget, so it genuinely recovers more than this
+                // view; in summary mode the full rendered diff is the next step
+                // up.
+                const budgeted = applyCharBudget(
+                    text,
+                    OUTPUT_BUDGETS.diff,
+                    summary
+                        ? `jules_get_session_diff with session_id="${session_id}" and summary=false`
+                        : `jules_pull_session with session_id="${session_id}" for the raw patch`,
+                );
+
                 return {
-                    content: [{ type: 'text' as const, text }],
+                    content: [{ type: 'text' as const, text: budgeted }],
                 };
             } catch (error) {
                 return errorResponse(error);

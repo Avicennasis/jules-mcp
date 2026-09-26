@@ -49,6 +49,48 @@ export function describeState(state: SessionState): string {
     return STATE_DESCRIPTIONS[state] ?? `Unknown state: ${state}`;
 }
 
+/**
+ * State -> the concrete next tool call (#50440).
+ *
+ * STATE_DESCRIPTIONS says what a state IS; this says what to DO about it, so a
+ * model is told rather than inferring. Deliberately names real tool calls, and
+ * is appended only to the full `formatSession` — compact listings omit it, so a
+ * one-line-per-session browse does not grow a paragraph per row.
+ */
+const STATE_NEXT_STEPS: Record<string, string> = {
+    QUEUED: 'Next: poll with jules_get_session, or read jules_list_activities once it starts.',
+    PLANNING:
+        'Next: poll with jules_get_session; the plan appears under jules_list_activities.',
+    AWAITING_PLAN_APPROVAL:
+        'Next: review the plan with jules_get_session_diff, then jules_approve_plan to proceed, or jules_send_message to redirect.',
+    AWAITING_USER_FEEDBACK:
+        'Next: reply with jules_send_message, or jules_archive_session to abandon it.',
+    IN_PROGRESS:
+        'Next: poll with jules_get_session; review the result with jules_get_session_diff.',
+    PAUSED: 'Next: resume with jules_send_message, or jules_archive_session if abandoning it.',
+    FAILED: 'Next: inspect what happened with jules_list_activities / jules_get_activity.',
+    COMPLETED:
+        'Next: pull the changes with jules_pull_session, or review with jules_get_session_diff.',
+    COMPLETED_UNKNOWN:
+        'Next: the outcome was not reported — inspect jules_list_activities, then jules_pull_session if there are changes.',
+    CANCELLED:
+        'Next: this session was stopped; jules_archive_session to hide it from the active list.',
+    CANCELED:
+        'Next: this session was stopped; jules_archive_session to hide it from the active list.',
+
+    // Legacy aliases map to the same guidance as their canonical state.
+    PENDING:
+        'Next: poll with jules_get_session, or read jules_list_activities once it starts.',
+    RUNNING:
+        'Next: poll with jules_get_session; review the result with jules_get_session_diff.',
+    AWAITING_USER_INPUT:
+        'Next: reply with jules_send_message, or jules_archive_session to abandon it.',
+};
+
+export function nextStepFor(state: SessionState): string | undefined {
+    return STATE_NEXT_STEPS[state];
+}
+
 export function truncatePatch(patch: string, maxLines = 50): string {
     const lines = patch.split('\n');
     if (lines.length <= maxLines) {
@@ -329,6 +371,14 @@ export function formatSession(
                 parts.push(`  ${pr.description}`);
             }
         }
+    }
+
+    // #50440: tell the caller what to do next rather than leaving them to
+    // infer it. Never added to the compact listing.
+    const next = nextStepFor(state);
+    if (next) {
+        parts.push('');
+        parts.push(next);
     }
 
     return parts.join('\n');
