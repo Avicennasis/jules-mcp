@@ -130,7 +130,9 @@ describe('dispatch log', () => {
         recordDispatch(entry, log);
         const [b] = readDispatches(log);
         expect('title' in b.sessions[0]).toBe(false);
-        expect(JSON.parse(fs.readFileSync(log, 'utf8')).sessions[0].title).toBeUndefined();
+        expect(
+            JSON.parse(fs.readFileSync(log, 'utf8')).sessions[0].title,
+        ).toBeUndefined();
     });
 
     it('a missing log reads as empty, and a torn line is skipped', () => {
@@ -179,9 +181,7 @@ describe('dispatch log', () => {
     });
 
     it('batch ids are unique across calls', () => {
-        const ids = new Set(
-            Array.from({ length: 200 }, () => newBatchId()),
-        );
+        const ids = new Set(Array.from({ length: 200 }, () => newBatchId()));
         expect(ids.size).toBe(200);
     });
 });

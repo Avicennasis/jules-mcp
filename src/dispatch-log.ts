@@ -120,7 +120,9 @@ export function recordDispatch(
     try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true });
         // 0600: the record carries prompts, which can be sensitive.
-        fs.appendFileSync(logPath, JSON.stringify(entry) + '\n', { mode: 0o600 });
+        fs.appendFileSync(logPath, JSON.stringify(entry) + '\n', {
+            mode: 0o600,
+        });
         return { ok: true, path: logPath };
     } catch (error) {
         return {
@@ -133,7 +135,9 @@ export function recordDispatch(
 
 /** Read every dispatch record, oldest first. A missing log is an empty list; a
  * torn or unparseable line is skipped rather than failing the read. */
-export function readDispatches(logPath: string = dispatchLogPath()): DispatchEntry[] {
+export function readDispatches(
+    logPath: string = dispatchLogPath(),
+): DispatchEntry[] {
     let raw: string;
     try {
         raw = fs.readFileSync(logPath, 'utf8');

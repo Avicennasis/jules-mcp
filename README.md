@@ -13,7 +13,7 @@ Built on the **official** Jules REST API (`v1alpha`) with CLI-inspired features 
 You ──▶ MCP client ──▶ jules-mcp ──▶ https://jules.googleapis.com/v1alpha ──▶ Jules
 ```
 
-- **22 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
+- **23 tools** covering sources, sessions, activities, scheduling, a one-shot "run task" (with parallel mode), a GitHub issue-to-task bridge, a patch extractor, a consolidated diff viewer, and local source configuration.
 - **7 prompts** — reusable task templates surfaced as slash commands, so a common workflow is one pick rather than an orchestration of tools. Each template's arguments are _derived from its own text_, so the two cannot drift apart.
 - **In-process scheduling** (cron) with AES-256-GCM-encrypted local persistence — no external scheduler required.
 - **Local source config**: track per-repo metadata the API doesn't expose (e.g. whether "suggestions" is enabled) and annotate API responses with it.
@@ -244,7 +244,7 @@ everything which can reach it may act as you on every connected repository.
 
 ## Tool reference
 
-22 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
+23 tools. Mutating tools (✎) require a `reason` string for the audit trail; tools marked 🔍 support `dry_run`; tools marked 🔥 are destructive/irreversible and require an explicit confirmation flag.
 
 ### Sources
 
