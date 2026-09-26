@@ -7,6 +7,7 @@ import { emitAudit } from '../audit.js';
 import { JulesAPIError } from '../errors.js';
 import { checkSourceAllowed } from '../allowlist.js';
 import { normalizeResourceName } from '../types.js';
+import { scanPrompt } from '../secrets.js';
 
 function errorResponse(error: unknown) {
     return {
@@ -61,6 +62,12 @@ export function registerSchedulingTools(
                 .boolean()
                 .default(false)
                 .describe('Preview without creating'),
+            allow_secret: z
+                .boolean()
+                .default(false)
+                .describe(
+                    'Schedule the prompt even if it looks like it contains a credential. Requires a reason; the value is redacted from the audit record.',
+                ),
         },
         async ({
             cron: cronExpr,
@@ -72,6 +79,7 @@ export function registerSchedulingTools(
             automation_mode,
             reason,
             dry_run,
+            allow_secret,
         }) => {
             // #50432: bound WHICH REPO this may touch, before the schedule is
             // stored. A schedule is worse than a one-shot here -- it re-fires,
@@ -94,6 +102,36 @@ export function registerSchedulingTools(
                     payload: { denied_by: 'allowlist', repo: gate.repo, label },
                 });
                 return errorResponse(new JulesAPIError(gate.message, 403));
+            }
+
+            // #50431: a scheduled prompt is stored AND sent repeatedly, so
+            // refuse a credential-shaped one before it is persisted.
+            const scan = scanPrompt(prompt, {
+                allowSecret: allow_secret === true,
+                reason,
+            });
+            if (!scan.allowed) {
+                await emitAudit({
+                    source: 'jules-mcp',
+                    category: 'scheduling',
+                    action: 'DENY',
+                    service: normalizeResourceName(source, 'sources'),
+                    reason,
+                    payload: {
+                        denied_by: 'secret-scan',
+                        pattern_class: scan.hit?.patternClass,
+                        label,
+                    },
+                });
+                return {
+                    content: [
+                        {
+                            type: 'text' as const,
+                            text: JSON.stringify(scan.error, null, 2),
+                        },
+                    ],
+                    isError: true,
+                };
             }
 
             const input = {
@@ -174,7 +212,11 @@ export function registerSchedulingTools(
                     service: source,
                     reason,
                     target: entry.id,
-                    payload: { label, cron: cronExpr, prompt },
+                    payload: {
+                        label,
+                        cron: cronExpr,
+                        prompt: scan.auditPrompt,
+                    },
                 });
                 return {
                     content: [
