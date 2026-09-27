@@ -643,8 +643,7 @@ export function registerConvenienceTools(
                                         resume: {
                                             tool: 'jules_get_session',
                                             arguments: {
-                                                session_id:
-                                                    outcome.session.id,
+                                                session_id: outcome.session.id,
                                             },
                                         },
                                         session:
