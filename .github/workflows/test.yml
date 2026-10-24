@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   test:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: node
     # Local dev-pool runner (dev-jules-mcp-1). GitHub-hosted minutes are a single
     # monthly cap shared across every repo on the account; exhausting it blocks
@@ -41,6 +42,7 @@ jobs:
       - run: npm test
 
   lint:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: eslint
     # Local dev-pool runner (dev-jules-mcp-1). GitHub-hosted minutes are a single
     # monthly cap shared across every repo on the account; exhausting it blocks
@@ -57,6 +59,7 @@ jobs:
       - run: npx eslint .
 
   pre-commit:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: pre-commit
     # Local dev-pool runner (dev-jules-mcp-1). GitHub-hosted minutes are a single
     # monthly cap shared across every repo on the account; exhausting it blocks
