@@ -134,6 +134,7 @@ export interface PullRequest {
 
 export interface SessionOutput {
     pullRequest?: PullRequest;
+    changeSet?: ChangeSet;
 }
 
 export interface Session {

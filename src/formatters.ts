@@ -419,6 +419,15 @@ export function formatSession(
                 parts.push(`  URL: ${pr.url}`);
                 parts.push(`  ${pr.description}`);
             }
+            if (output.changeSet) {
+                const partsForArtifacts = formatArtifacts([
+                    { changeSet: output.changeSet },
+                ]);
+                if (partsForArtifacts) {
+                    parts.push('');
+                    parts.push(partsForArtifacts);
+                }
+            }
         }
     }
 
