@@ -298,7 +298,7 @@ everything which can reach it may act as you on every connected repository.
 
 ## Prompt catalog
 
-19 tools is a lot to orchestrate from scratch. The server also exposes MCP **prompts** — pre-written task templates that clients surface as slash commands, so a common workflow is one pick instead of a plan.
+23 tools is a lot to orchestrate from scratch. The server also exposes MCP **prompts** — pre-written task templates that clients surface as slash commands, so a common workflow is one pick instead of a plan.
 
 **7 prompts**, in two kinds. A `task` prompt renders text destined for the `prompt` argument of `jules_create_session` / `jules_run_task`; an `operation` prompt is a workflow that drives this server's own tools.
 
