@@ -184,6 +184,28 @@ describe('formatSession', () => {
         expect(result).toContain('Bug Fix');
     });
 
+    it('formats a realistic changeSet gitPatch from outputs (similar to #50446)', () => {
+        const sessionWithPatch: Session = {
+            ...baseSession,
+            outputs: [
+                {
+                    changeSet: {
+                        source: 'sources/github/o/r',
+                        gitPatch: {
+                            unidiffPatch: 'diff --git a/file.ts b/file.ts\n+added',
+                            baseCommitId: 'abc1234',
+                            suggestedCommitMessage: 'Added a thing',
+                        },
+                    },
+                },
+            ],
+        };
+        const result = formatSession(sessionWithPatch);
+        expect(result).toContain('file.ts');
+        expect(result).toContain('Added a thing');
+        expect(result).toContain('abc1234');
+    });
+
     // #50828: some responses (`:approvePlan`) omit sourceContext entirely.
     // Rendering must degrade to a placeholder, not throw.
     it('renders a placeholder when the API omits sourceContext', () => {
@@ -507,6 +529,35 @@ describe('formatSessionDiff', () => {
         expect(out).toContain('final commit');
         // Uses the LAST (cumulative) changeset, not the intermediate one
         expect(out).not.toContain('+partial');
+    });
+
+    it('surfaces diffs from activity artifacts even when session.outputs is empty (#50446)', () => {
+        const sessionWithEmptyOutputs = { ...session, outputs: [] };
+        const activities: Activity[] = [
+            {
+                name: 's/abc/activities/1',
+                id: '1',
+                createTime: 't',
+                originator: 'agent',
+                sessionCompleted: {},
+                artifacts: [
+                    {
+                        changeSet: {
+                            source: 'sources/github/o/r',
+                            gitPatch: {
+                                unidiffPatch: 'diff --git a/f.js b/f.js\n+real code from artifact',
+                                baseCommitId: 'b',
+                                suggestedCommitMessage: 'final commit',
+                            },
+                        },
+                    },
+                ],
+            },
+        ];
+        
+        const out = formatSessionDiff(sessionWithEmptyOutputs, activities);
+        expect(out).toContain('+real code from artifact');
+        expect(out).toContain('final commit');
     });
 
     it('notes when a session produced only a plan (no code)', () => {

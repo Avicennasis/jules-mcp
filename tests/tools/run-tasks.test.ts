@@ -11,7 +11,7 @@
  * predicate that is written, unit-tested and never wired in is a green suite
  * over a dead code path.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { registerConvenienceTools } from '../../src/tools/convenience.js';
 import type { JulesClient } from '../../src/jules-client.js';
 import type { Session } from '../../src/types.js';
@@ -50,6 +50,7 @@ describe('jules_run_tasks', () => {
     let mockClient: Partial<JulesClient>;
 
     beforeEach(() => {
+        vi.useFakeTimers();
         vi.resetAllMocks();
         const made = makeServer();
         tools = made.tools;
@@ -65,6 +66,10 @@ describe('jules_run_tasks', () => {
             approvePlan: vi.fn().mockResolvedValue(makeSession('x')),
         };
         registerConvenienceTools(made.server, mockClient as JulesClient);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('registers jules_run_tasks alongside jules_run_task', () => {
@@ -192,7 +197,10 @@ describe('jules_run_tasks', () => {
         (mockClient.createSession as any).mockImplementation(async () => {
             inFlight++;
             maxInFlight = Math.max(maxInFlight, inFlight);
-            await new Promise((r) => setTimeout(r, 2));
+            // Simulate work without actually sleeping time, or manually advance time
+            // since vi.useFakeTimers() is active, we have to advance time for the promise to resolve
+            const p = new Promise<void>((r) => setTimeout(r, 2));
+            await p;
             inFlight--;
             return makeSession(`s${Math.random().toString(36).slice(2, 8)}`);
         });
@@ -200,7 +208,7 @@ describe('jules_run_tasks', () => {
         const tasks = Array.from({ length: 12 }, (_, i) => ({
             prompt: `task ${i}`,
         }));
-        const result = await tools.get('jules_run_tasks')!.handler({
+        const pResult = tools.get('jules_run_tasks')!.handler({
             tasks,
             source: 'sources/github/o/r',
             starting_branch: 'main',
@@ -209,6 +217,9 @@ describe('jules_run_tasks', () => {
             poll_interval_ms: 5,
             timeout_ms: 5000,
         });
+
+        await vi.runAllTimersAsync();
+        const result = await pResult;
 
         expect(mockClient.createSession).toHaveBeenCalledTimes(12);
         expect(maxInFlight).toBeLessThanOrEqual(3);

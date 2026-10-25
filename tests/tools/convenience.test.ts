@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { registerConvenienceTools } from '../../src/tools/convenience.js';
 import type { JulesClient } from '../../src/jules-client.js';
 import type { Session } from '../../src/types.js';
@@ -13,6 +13,7 @@ describe('convenience tools', () => {
     let registeredTools: Map<string, { handler: Function }>;
 
     beforeEach(() => {
+        vi.useFakeTimers();
         vi.resetAllMocks();
         registeredTools = new Map();
         mockServer = {
@@ -93,6 +94,10 @@ describe('convenience tools', () => {
         };
 
         registerConvenienceTools(mockServer, mockClient as JulesClient);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('registers jules_run_task', () => {
