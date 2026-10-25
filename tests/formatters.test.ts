@@ -78,17 +78,31 @@ describe('state next steps (#50440)', () => {
 describe('truncatePatch', () => {
     it('returns short patches unchanged', () => {
         const patch = 'line1\nline2\nline3';
-        expect(truncatePatch(patch, 50)).toBe(patch);
+        const result = truncatePatch(patch, 50);
+        expect(result.text).toBe(patch);
+        expect(result.isTruncated).toBe(false);
+        expect(result.originalLength).toBe(patch.length);
     });
 
     it('truncates long patches with a count', () => {
         const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
         const patch = lines.join('\n');
         const result = truncatePatch(patch, 10);
-        expect(result).toContain('line 0');
-        expect(result).toContain('line 9');
-        expect(result).toContain('90 more lines');
-        expect(result.split('\n').length).toBeLessThan(15);
+        expect(result.text).toContain('line 0');
+        expect(result.text).toContain('line 9');
+        expect(result.text).toContain('90 more lines');
+        expect(result.text).not.toContain('line 10');
+        expect(result.isTruncated).toBe(true);
+        expect(result.originalLength).toBe(patch.length);
+    });
+    
+    it('handles patches exactly at the limit correctly', () => {
+        const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+        const patch = lines.join('\n');
+        const result = truncatePatch(patch, 10);
+        expect(result.isTruncated).toBe(false);
+        expect(result.text).toBe(patch);
+        expect(result.originalLength).toBe(patch.length);
     });
 });
 

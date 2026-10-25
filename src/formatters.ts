@@ -140,14 +140,44 @@ export function nextStepFor(state: SessionState): string | undefined {
     return STATE_NEXT_STEPS[state];
 }
 
-export function truncatePatch(patch: string, maxLines = 50): string {
+export const MAX_PATCH_CHARS = 20_000;
+
+export interface TruncatedPatch {
+    text: string;
+    isTruncated: boolean;
+    /** The original length of the patch measured in characters. */
+    originalLength: number;
+}
+
+export function truncatePatch(patch: string, maxLines = 50): TruncatedPatch {
     const lines = patch.split('\n');
-    if (lines.length <= maxLines) {
-        return patch;
+    let isTruncated = false;
+    let shownLines = lines;
+    
+    if (lines.length > maxLines) {
+        isTruncated = true;
+        shownLines = lines.slice(0, maxLines);
     }
-    const shown = lines.slice(0, maxLines);
-    const remaining = lines.length - maxLines;
-    return shown.join('\n') + `\n\n... ${remaining} more lines omitted`;
+    
+    let text = shownLines.join('\n');
+    if (text.length > MAX_PATCH_CHARS) {
+        isTruncated = true;
+        text = text.slice(0, MAX_PATCH_CHARS);
+    }
+    
+    if (isTruncated) {
+        const remainingLines = lines.length - shownLines.length;
+        const msgLines = remainingLines > 0 ? `... ${remainingLines} more lines omitted` : '';
+        const msgChars = text.length < shownLines.join('\n').length ? `... output exceeded ${MAX_PATCH_CHARS} chars` : '';
+        const msg = [msgLines, msgChars].filter(Boolean).join(' and ');
+        text += `\n\n${msg}`;
+    }
+
+    return {
+        text,
+        isTruncated,
+        originalLength: patch.length
+    };
 }
 
 export function formatPlan(plan: Plan): string {
@@ -454,7 +484,7 @@ function formatArtifacts(artifacts: Artifact[]): string {
                     parts.push(`  Base: ${gp.baseCommitId}`);
                 }
                 if (gp.unidiffPatch) {
-                    parts.push(`  Diff:\n${truncatePatch(gp.unidiffPatch)}`);
+                    parts.push(`  Diff:\n${truncatePatch(gp.unidiffPatch).text}`);
                 }
             }
         }

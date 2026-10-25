@@ -13,6 +13,7 @@ import {
     extractQualitySignals,
     OUTPUT_BUDGETS,
     UNKNOWN_SOURCE,
+    truncatePatch,
 } from '../formatters.js';
 import { JulesAPIError } from '../errors.js';
 
@@ -181,6 +182,8 @@ export function registerDiffTools(
                     )
                     .join('\n');
 
+                const { text: truncatedPatchText, isTruncated, originalLength } = truncatePatch(result.patch);
+
                 const headerParts = [
                     `Session: ${session.title ?? session.id}`,
                     `State: ${session.state}`,
@@ -213,6 +216,13 @@ export function registerDiffTools(
                     );
                 }
 
+                if (isTruncated) {
+                    headerParts.push('');
+                    headerParts.push('⚠️ WARNING: This patch was truncated because it exceeded size limits.');
+                    headerParts.push('It is NOT complete and cannot be applied with `git apply`.');
+                    headerParts.push('To review this large changeset, use `jules_get_session_diff(summary: true)`.');
+                }
+
                 headerParts.push(
                     '',
                     '--- patch (pipe to `git apply` or `git apply --3way`) ---',
@@ -221,14 +231,23 @@ export function registerDiffTools(
 
                 const header = headerParts.filter((l) => l !== null).join('\n');
 
-                return {
+                const response: any = {
                     content: [
                         {
                             type: 'text' as const,
-                            text: header + result.patch,
+                            text: header + truncatedPatchText,
                         },
-                    ],
+                    ]
                 };
+                
+                if (isTruncated) {
+                    response.unidiffTruncated = true;
+                    response.unidiffOriginalLength = originalLength;
+                } else {
+                    response.unidiffTruncated = false;
+                }
+
+                return response;
             } catch (error) {
                 return errorResponse(error);
             }
