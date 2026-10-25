@@ -144,4 +144,78 @@ describe('diff tools', () => {
         expect(parsed.code).toBe(404);
         expect(result.isError).toBe(true);
     });
+    
+    describe('jules_pull_session truncation', () => {
+        it('returns untruncated patch correctly', async () => {
+            const handler = registeredTools.get('jules_pull_session')!.handler;
+            const result = await handler({ session_id: 'abc' });
+            expect(result.unidiffTruncated).toBe(false);
+            expect(result.content[0].text).toContain('+the change');
+        });
+
+        it('returns truncated patch with explicit fields when over limit', async () => {
+            const longLines = Array.from({ length: 60 }, (_, i) => `+line ${i}`).join('\n');
+            mockClient.listActivities = vi.fn().mockResolvedValue({
+                activities: [
+                    {
+                        name: 's/abc/activities/1',
+                        id: '1',
+                        createTime: 't',
+                        originator: 'agent',
+                        sessionCompleted: {},
+                        artifacts: [
+                            {
+                                changeSet: {
+                                    source: 'sources/github/o/r',
+                                    gitPatch: {
+                                        unidiffPatch: `diff --git a/f.js b/f.js\n${longLines}`,
+                                        baseCommitId: 'b',
+                                        suggestedCommitMessage: 'commit msg',
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            });
+            const handler = registeredTools.get('jules_pull_session')!.handler;
+            const result = await handler({ session_id: 'abc' });
+            expect(result.unidiffTruncated).toBe(true);
+            expect(result.unidiffOriginalLength).toBeGreaterThan(0);
+            expect(result.content[0].text).toContain('WARNING: This patch was truncated');
+            expect(result.content[0].text).not.toContain('+line 59');
+        });
+        
+        it('returns truncated patch with explicit fields when over chars limit', async () => {
+            const longLine = '+'.repeat(21000);
+            mockClient.listActivities = vi.fn().mockResolvedValue({
+                activities: [
+                    {
+                        name: 's/abc/activities/1',
+                        id: '1',
+                        createTime: 't',
+                        originator: 'agent',
+                        sessionCompleted: {},
+                        artifacts: [
+                            {
+                                changeSet: {
+                                    source: 'sources/github/o/r',
+                                    gitPatch: {
+                                        unidiffPatch: `diff --git a/f.js b/f.js\n${longLine}`,
+                                        baseCommitId: 'b',
+                                        suggestedCommitMessage: 'commit msg',
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            });
+            const handler = registeredTools.get('jules_pull_session')!.handler;
+            const result = await handler({ session_id: 'abc' });
+            expect(result.unidiffTruncated).toBe(true);
+            expect(result.unidiffOriginalLength).toBeGreaterThan(0);
+            expect(result.content[0].text).toContain('WARNING: This patch was truncated');
+        });
+    });
 });
