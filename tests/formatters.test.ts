@@ -361,12 +361,16 @@ describe('formatActivity', () => {
             }) as unknown as Activity;
 
         it.each([
+            ['no union member set at all', {}],
+            ['description only', { description: 'description only' }],
+            ['originator only', { originator: 'agent' }],
             ['progressUpdated', { progressUpdated: {} }],
             ['agentMessaged', { agentMessaged: {} }],
             ['userMessaged', { userMessaged: {} }],
             ['planApproved', { planApproved: {} }],
             ['sessionFailed', { sessionFailed: {} }],
             ['planGenerated', { planGenerated: {} }],
+            ['sessionCompleted', { sessionCompleted: {} }],
             [
                 'planGenerated with an empty plan',
                 { planGenerated: { plan: {} } },

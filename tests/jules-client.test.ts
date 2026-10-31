@@ -82,6 +82,27 @@ describe('JulesClient', () => {
             expect(opts.method).toBe('POST');
             expect(JSON.parse(opts.body)).toMatchObject({ prompt: 'fix bugs' });
         });
+
+        it('handles createSession response with state omitted', async () => {
+            const session = {
+                name: 'sessions/123',
+                id: '123',
+                prompt: 'fix bugs',
+                sourceContext: { source: 'sources/github/o/r' },
+                createTime: '2026-01-01T00:00:00Z',
+                updateTime: '2026-01-01T00:00:00Z',
+                url: 'https://jules.google/sessions/123',
+            };
+            mockFetch.mockResolvedValueOnce(jsonResponse(session));
+
+            const result = await client.createSession({
+                prompt: 'fix bugs',
+                sourceContext: { source: 'sources/github/o/r' },
+            });
+
+            expect(result.id).toBe('123');
+            expect(result.state).toBeUndefined();
+        });
     });
 
     describe('getSession', () => {
