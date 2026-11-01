@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JulesClient } from '../src/jules-client.js';
 import {
     JulesAuthError,
@@ -382,19 +382,12 @@ describe('JulesClient retry', () => {
             random: () => 0,
             sleep: async (ms: number) => {
                 slept.push(ms);
-                // Actually advance timers here to avoid real sleeps but allow Promise loops to continue
-                await vi.advanceTimersByTimeAsync(ms);
             },
         });
 
     beforeEach(() => {
-        vi.useFakeTimers();
         vi.resetAllMocks();
         slept = [];
-    });
-
-    afterEach(() => {
-        vi.useRealTimers();
     });
 
     it('retries a 429 on POST /sessions — rejected means not processed', async () => {
@@ -584,7 +577,6 @@ describe('JulesClient retry', () => {
         const client = new JulesClient('test-api-key', {
             retryBaseDelayMs: 0,
             retryJitterMs: 0,
-            sleep: async (ms) => { await vi.advanceTimersByTimeAsync(ms); },
         });
         const session = await client.getSession('sessions/1');
 

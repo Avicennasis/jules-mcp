@@ -192,7 +192,8 @@ describe('formatSession', () => {
                     changeSet: {
                         source: 'sources/github/o/r',
                         gitPatch: {
-                            unidiffPatch: 'diff --git a/file.ts b/file.ts\n+added',
+                            unidiffPatch:
+                                'diff --git a/file.ts b/file.ts\n+added',
                             baseCommitId: 'abc1234',
                             suggestedCommitMessage: 'Added a thing',
                         },
@@ -545,7 +546,8 @@ describe('formatSessionDiff', () => {
                         changeSet: {
                             source: 'sources/github/o/r',
                             gitPatch: {
-                                unidiffPatch: 'diff --git a/f.js b/f.js\n+real code from artifact',
+                                unidiffPatch:
+                                    'diff --git a/f.js b/f.js\n+real code from artifact',
                                 baseCommitId: 'b',
                                 suggestedCommitMessage: 'final commit',
                             },
@@ -554,7 +556,7 @@ describe('formatSessionDiff', () => {
                 ],
             },
         ];
-        
+
         const out = formatSessionDiff(sessionWithEmptyOutputs, activities);
         expect(out).toContain('+real code from artifact');
         expect(out).toContain('final commit');
