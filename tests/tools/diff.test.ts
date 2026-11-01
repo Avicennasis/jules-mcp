@@ -144,7 +144,7 @@ describe('diff tools', () => {
         expect(parsed.code).toBe(404);
         expect(result.isError).toBe(true);
     });
-    
+
     describe('jules_pull_session truncation', () => {
         it('returns untruncated patch correctly', async () => {
             const handler = registeredTools.get('jules_pull_session')!.handler;
@@ -154,7 +154,10 @@ describe('diff tools', () => {
         });
 
         it('returns truncated patch with explicit fields when over limit', async () => {
-            const longLines = Array.from({ length: 60 }, (_, i) => `+line ${i}`).join('\n');
+            const longLines = Array.from(
+                { length: 60 },
+                (_, i) => `+line ${i}`,
+            ).join('\n');
             mockClient.listActivities = vi.fn().mockResolvedValue({
                 activities: [
                     {
@@ -182,10 +185,12 @@ describe('diff tools', () => {
             const result = await handler({ session_id: 'abc' });
             expect(result.unidiffTruncated).toBe(true);
             expect(result.unidiffOriginalLength).toBeGreaterThan(0);
-            expect(result.content[0].text).toContain('WARNING: This patch was truncated');
+            expect(result.content[0].text).toContain(
+                'WARNING: This patch was truncated',
+            );
             expect(result.content[0].text).not.toContain('+line 59');
         });
-        
+
         it('returns truncated patch with explicit fields when over chars limit', async () => {
             const longLine = '+'.repeat(21000);
             mockClient.listActivities = vi.fn().mockResolvedValue({
@@ -215,7 +220,9 @@ describe('diff tools', () => {
             const result = await handler({ session_id: 'abc' });
             expect(result.unidiffTruncated).toBe(true);
             expect(result.unidiffOriginalLength).toBeGreaterThan(0);
-            expect(result.content[0].text).toContain('WARNING: This patch was truncated');
+            expect(result.content[0].text).toContain(
+                'WARNING: This patch was truncated',
+            );
         });
     });
 });

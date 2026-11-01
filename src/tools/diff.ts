@@ -182,7 +182,11 @@ export function registerDiffTools(
                     )
                     .join('\n');
 
-                const { text: truncatedPatchText, isTruncated, originalLength } = truncatePatch(result.patch);
+                const {
+                    text: truncatedPatchText,
+                    isTruncated,
+                    originalLength,
+                } = truncatePatch(result.patch);
 
                 const headerParts = [
                     `Session: ${session.title ?? session.id}`,
@@ -218,9 +222,15 @@ export function registerDiffTools(
 
                 if (isTruncated) {
                     headerParts.push('');
-                    headerParts.push('⚠️ WARNING: This patch was truncated because it exceeded size limits.');
-                    headerParts.push('It is NOT complete and cannot be applied with `git apply`.');
-                    headerParts.push('To review this large changeset, use `jules_get_session_diff(summary: true)`.');
+                    headerParts.push(
+                        '⚠️ WARNING: This patch was truncated because it exceeded size limits.',
+                    );
+                    headerParts.push(
+                        'It is NOT complete and cannot be applied with `git apply`.',
+                    );
+                    headerParts.push(
+                        'To review this large changeset, use `jules_get_session_diff(summary: true)`.',
+                    );
                 }
 
                 headerParts.push(
@@ -237,9 +247,9 @@ export function registerDiffTools(
                             type: 'text' as const,
                             text: header + truncatedPatchText,
                         },
-                    ]
+                    ],
                 };
-                
+
                 if (isTruncated) {
                     response.unidiffTruncated = true;
                     response.unidiffOriginalLength = originalLength;

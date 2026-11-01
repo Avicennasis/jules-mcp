@@ -95,7 +95,7 @@ describe('truncatePatch', () => {
         expect(result.isTruncated).toBe(true);
         expect(result.originalLength).toBe(patch.length);
     });
-    
+
     it('handles patches exactly at the limit correctly', () => {
         const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
         const patch = lines.join('\n');

@@ -153,22 +153,28 @@ export function truncatePatch(patch: string, maxLines = 50): TruncatedPatch {
     const lines = patch.split('\n');
     let isTruncated = false;
     let shownLines = lines;
-    
+
     if (lines.length > maxLines) {
         isTruncated = true;
         shownLines = lines.slice(0, maxLines);
     }
-    
+
     let text = shownLines.join('\n');
     if (text.length > MAX_PATCH_CHARS) {
         isTruncated = true;
         text = text.slice(0, MAX_PATCH_CHARS);
     }
-    
+
     if (isTruncated) {
         const remainingLines = lines.length - shownLines.length;
-        const msgLines = remainingLines > 0 ? `... ${remainingLines} more lines omitted` : '';
-        const msgChars = text.length < shownLines.join('\n').length ? `... output exceeded ${MAX_PATCH_CHARS} chars` : '';
+        const msgLines =
+            remainingLines > 0
+                ? `... ${remainingLines} more lines omitted`
+                : '';
+        const msgChars =
+            text.length < shownLines.join('\n').length
+                ? `... output exceeded ${MAX_PATCH_CHARS} chars`
+                : '';
         const msg = [msgLines, msgChars].filter(Boolean).join(' and ');
         text += `\n\n${msg}`;
     }
@@ -176,7 +182,7 @@ export function truncatePatch(patch: string, maxLines = 50): TruncatedPatch {
     return {
         text,
         isTruncated,
-        originalLength: patch.length
+        originalLength: patch.length,
     };
 }
 
@@ -484,7 +490,9 @@ function formatArtifacts(artifacts: Artifact[]): string {
                     parts.push(`  Base: ${gp.baseCommitId}`);
                 }
                 if (gp.unidiffPatch) {
-                    parts.push(`  Diff:\n${truncatePatch(gp.unidiffPatch).text}`);
+                    parts.push(
+                        `  Diff:\n${truncatePatch(gp.unidiffPatch).text}`,
+                    );
                 }
             }
         }
